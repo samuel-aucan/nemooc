@@ -1,0 +1,32 @@
+# Base de datos local (no se comparte entre PCs)
+data/
+
+# Logs
+logs/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Python local embeddable
+python/
+venv/
+env/
+
+# Configuración personal (ticket de API, rutas locales)
+config/settings.json
+
+# Preferencias de columnas (cada usuario tiene las suyas)
+config/column_prefs.json
+
+# Archivos temporales
+*.tmp
+*.bak
+Thumbs.db
+.DS_Store
+
+# PyInstaller output
+build/
+dist/
+desktop.ini

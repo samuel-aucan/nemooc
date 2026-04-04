@@ -1,0 +1,49 @@
+# Sistema / Windows
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Herramientas locales
+.claude/
+*.tmp
+*.bak
+tmp_*.log
+*.err.log
+*.out.log
+
+# Python
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Node / frontend
+**/node_modules/
+**/.vite/
+nemo_oc_web/frontend/dist/
+nemo_oc_web/frontend/tsconfig.tsbuildinfo
+
+# Datos, secretos y artefactos locales
+*.db
+*.db-wal
+*.db-shm
+session_secret.txt
+**/.env
+**/.env.*
+nemo_oc/data/
+nemo_oc/logs/
+nemo_oc/config/settings.json
+nemo_oc/config/column_prefs.json
+nemo_oc/python/
+nemo_oc/build/
+nemo_oc/dist/
+nemo_oc_web/tmp/
+nemo_oc_web/backend_test.log
+nemo_oc_web/backend_test.err.log
+
+# Respaldos y muestras operativas
+RESPALDOS/
+ocs prueba/

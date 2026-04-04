@@ -1,0 +1,396 @@
+"""
+Pydantic schemas para request/response de la API REST.
+"""
+from typing import List, Optional
+from pydantic import BaseModel
+
+
+# ── OC ──────────────────────────────────────────────────────────────────────
+
+class OrdenCompraOut(BaseModel):
+    codigo_oc: str
+    nombre_oc: str
+    codigo_estado_mp: int
+    estado_mp: str
+    codigo_tipo: str
+    tipo_oc: str
+    fecha_creacion: str
+    fecha_envio: str
+    fecha_aceptacion: str
+    fecha_cancelacion: str
+    fecha_ultima_modificacion: str
+    total_neto: float
+    impuestos: float
+    total: float
+    porcentaje_iva: float
+    descuentos: float
+    cargos: float
+    moneda: str
+    codigo_organismo: str
+    nombre_organismo: str
+    rut_unidad: str
+    codigo_unidad: str
+    nombre_unidad: str
+    direccion_unidad: str
+    comuna_unidad: str
+    region_unidad: str
+    codigo_proveedor: str
+    nombre_proveedor: str
+    rut_proveedor: str
+    cliente_sap_sugerido: str
+    cantidad_lineas: int
+    estado_interno: str
+    fecha_ingreso: Optional[str]
+    notas: Optional[str]
+    # Enriquecidos desde cartera
+    cartera: str = ""
+    region_nombre: str = ""
+    razon_social: str = ""
+
+
+class LineaOCOut(BaseModel):
+    codigo_oc: str
+    correlativo: int
+    codigo_categoria: int
+    categoria: str
+    codigo_producto_api: str
+    codigo_mp: Optional[str]
+    producto: str
+    especificacion_comprador: str
+    especificacion_proveedor: str
+    cantidad: float
+    unidad: str
+    moneda: str
+    precio_neto: float
+    total_cargos: float
+    total_descuentos: float
+    total_impuestos: float
+    total: float
+    factor_empaque: float
+    cantidad_sap: Optional[float]
+    precio_sap: Optional[float]
+    itemcode_sap: Optional[str]
+    descripcion_sap: Optional[str]
+    estado_homologacion: str
+
+
+class OcDetailOut(BaseModel):
+    cabecera: OrdenCompraOut
+    lineas: List[LineaOCOut]
+
+
+class StatsOut(BaseModel):
+    total: int
+    sin_homolog: int
+    ingresadas: int
+
+
+class AnalyticsSummaryOut(BaseModel):
+    total_ocs: int
+    total_lineas: int
+    lineas_resueltas: int
+    lineas_pendientes: int
+    lineas_manuales: int
+    lineas_sugeridas: int
+    lineas_homologadas: int
+    ocs_por_revisar: int
+    monto_total: float
+    monto_resuelto: float
+    cobertura_lineas_pct: float
+    cobertura_monto_pct: float
+    cola_revision: int
+    total_cola_sin_limite: int
+    pendientes_con_sugerencia: int
+    pendientes_sin_sugerencia: int
+
+
+class FiltrosOut(BaseModel):
+    estados_mp: List[str]
+    tipos: List[str]
+    carteras: List[str]
+
+
+class SapTextOut(BaseModel):
+    text: str
+    excluidos: List[int]
+
+
+# ── Línea asignación ─────────────────────────────────────────────────────────
+
+class AsignarItemcodeIn(BaseModel):
+    itemcode_sap: str
+    descripcion_sap: str = ""
+    origen: str = "manual"  # 'sugerencia' | 'manual'
+
+
+# ── Sugerencia ───────────────────────────────────────────────────────────────
+
+class SugerenciaOut(BaseModel):
+    itemcode_sap: str
+    descripcion_sap: str
+    descripcion_match: str
+    frecuencia: int
+    score: float
+    estrellas: int  # 1-5
+
+
+class ReviewQueueItemOut(BaseModel):
+    codigo_oc: str
+    correlativo: int
+    fecha_envio: str
+    tipo_oc: str
+    nombre_organismo: str
+    cliente_sap_sugerido: str
+    cartera: str = ""
+    estado_interno: str
+    estado_homologacion: str
+    itemcode_sap: Optional[str]
+    descripcion_sap: Optional[str]
+    producto: str
+    especificacion_comprador: str
+    cantidad: float
+    total: float
+    rut_unidad: str
+    sugerencia_principal: Optional[SugerenciaOut] = None
+
+
+class AnalyticsOut(BaseModel):
+    summary: AnalyticsSummaryOut
+    queue: List[ReviewQueueItemOut]
+
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+class AuthUserOut(BaseModel):
+    id: int
+    username: str
+    nombre_completo: str
+    rol: str
+    activo: bool
+    last_login_at: str
+    must_reset_password: bool = False
+
+
+class AuthBootstrapStatusOut(BaseModel):
+    requires_setup: bool
+
+
+class AuthLoginIn(BaseModel):
+    username: str
+    password: str
+
+
+class AuthBootstrapIn(BaseModel):
+    username: str
+    nombre_completo: str = ""
+    password: str
+    password_confirm: str
+
+
+class AuthCreateUserIn(BaseModel):
+    username: str
+    nombre_completo: str = ""
+    password: str
+    password_confirm: str
+    rol: str = "operador"
+
+
+class AuthUpdateUserIn(BaseModel):
+    nombre_completo: str = ""
+    rol: str
+    activo: bool
+
+
+class AuthResetPasswordIn(BaseModel):
+    password: str
+    password_confirm: str
+
+
+class AuthResetAccessOut(BaseModel):
+    reset_token: str
+    expires_at: str
+
+
+class AuthCompleteResetIn(BaseModel):
+    username: str
+    token: str
+    password: str
+    password_confirm: str
+
+
+# ── Estado / Notas ───────────────────────────────────────────────────────────
+
+class EstadoIn(BaseModel):
+    estado: str
+
+
+class NotasIn(BaseModel):
+    notas: str
+
+
+# ── Sync ─────────────────────────────────────────────────────────────────────
+
+class SyncMpIn(BaseModel):
+    fecha_desde: str   # YYYY-MM-DD
+    fecha_hasta: str   # YYYY-MM-DD
+    solo_cm: bool = False
+
+
+class SyncGmailIn(BaseModel):
+    pass  # usa config guardada
+
+
+class SyncStartOut(BaseModel):
+    sync_id: str
+
+
+# ── Config ───────────────────────────────────────────────────────────────────
+
+class ConfigOut(BaseModel):
+    api_ticket: str
+    codigo_empresa: str
+    rut_proveedor: str
+    homologacion_path: str
+    maestra_path: str
+    cartera_path: str
+    correos_path: str
+    theme: str
+    color_theme: str
+    auto_sync: bool
+    auto_sync_days: int
+    auto_sync_interval: int
+    last_sync: str
+    log_level: str
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_password: str
+    smtp_enabled: bool
+    redsalud_homo_path: str
+    imap_server: str
+    imap_port: int
+    imap_folder: str
+    imap_filter_subject: str
+    licitaciones_path: str
+    sap_columns: List[str]
+
+
+class ConfigIn(BaseModel):
+    api_ticket: Optional[str] = None
+    codigo_empresa: Optional[str] = None
+    rut_proveedor: Optional[str] = None
+    homologacion_path: Optional[str] = None
+    maestra_path: Optional[str] = None
+    cartera_path: Optional[str] = None
+    correos_path: Optional[str] = None
+    theme: Optional[str] = None
+    color_theme: Optional[str] = None
+    auto_sync: Optional[bool] = None
+    auto_sync_days: Optional[int] = None
+    auto_sync_interval: Optional[int] = None
+    log_level: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_user: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_enabled: Optional[bool] = None
+    imap_server: Optional[str] = None
+    imap_port: Optional[int] = None
+    imap_folder: Optional[str] = None
+    imap_filter_subject: Optional[str] = None
+    redsalud_homo_path: Optional[str] = None
+    licitaciones_path: Optional[str] = None
+    sap_columns: Optional[List[str]] = None
+
+
+# ── Catálogos ─────────────────────────────────────────────────────────────────
+
+class CatalogStatsOut(BaseModel):
+    homologacion_cm: int
+    homologacion_sap: int
+    maestra: int
+    cartera: int
+    licitaciones: int
+    redsalud: int
+
+
+class CatalogImportOut(BaseModel):
+    imported: int
+    errors: List[str]
+
+
+class PrivateHoldingCatalogOut(BaseModel):
+    id: str
+    nombre: str
+    prefijo: str
+    parser_type: str
+    homo_file: str
+    catalog_count: int
+
+
+class CarteraSearchOut(BaseModel):
+    cod_cliente: str
+    rut: str
+    razon: str
+    comuna: str
+    region_nombre: str
+    cartera: str
+    vendedor: str
+
+
+class HoldingRutOut(BaseModel):
+    rut_norm: str
+    rut_display: str
+    nombre_sucursal: str
+
+
+class HoldingRuleOut(BaseModel):
+    id: int
+    rule_type: str
+    rule_value: str
+    prioridad: int
+    activo: bool
+    notas: str
+
+
+class HoldingOut(BaseModel):
+    id: str
+    nombre: str
+    prefijo: str
+    parser_type: str
+    homo_file: str
+    activo: bool
+    catalog_count: int
+    ruts: List[HoldingRutOut]
+    rules: List[HoldingRuleOut]
+
+
+class HoldingCreateIn(BaseModel):
+    id: str
+    nombre: str
+    prefijo: str
+    parser_type: str
+    homo_file: str = ""
+    activo: bool = True
+
+
+class HoldingUpdateIn(BaseModel):
+    nombre: str
+    prefijo: str
+    parser_type: str
+    homo_file: str = ""
+    activo: bool = True
+
+
+class HoldingRutIn(BaseModel):
+    rut: str
+    rut_display: str = ""
+    nombre_sucursal: str = ""
+
+
+class HoldingRuleIn(BaseModel):
+    rule_type: str
+    rule_value: str
+    prioridad: int = 100
+    activo: bool = True
+    notas: str = ""
