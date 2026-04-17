@@ -134,7 +134,7 @@ export default function AuditoriaPage() {
 
   // Hook para escuchar eventos de sync completo via SSE
   useEffect(() => {
-    const eventSource = new EventSource('/api/sync/status')
+    const eventSource = new EventSource('/api/v1/sync/status')
 
     const handleMessage = (event: MessageEvent) => {
       try {

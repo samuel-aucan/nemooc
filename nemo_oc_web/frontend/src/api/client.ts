@@ -5,7 +5,7 @@ export class ApiError extends Error {
 }
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: '/api/v1',
   withCredentials: true,
   paramsSerializer: (params) => {
     const parts: string[] = []

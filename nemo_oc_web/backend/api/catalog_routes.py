@@ -32,7 +32,7 @@ from app.repositories.maestra_repo import count_maestra
 from app.repositories.licitaciones_repo import count_licitaciones
 from .schemas import CatalogStatsOut, CatalogImportOut, PrivateHoldingCatalogOut, CarteraSearchOut
 
-router = APIRouter(prefix="/api/catalogs", tags=["catalogs"])
+router = APIRouter(prefix="/api/v1/catalogs", tags=["catalogs"])
 
 
 def _save_upload(file: UploadFile, filename: str) -> Path:

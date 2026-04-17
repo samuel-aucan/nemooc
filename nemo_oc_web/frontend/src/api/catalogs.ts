@@ -61,14 +61,14 @@ export const searchCartera = (q: string, limit = 8) =>
 
 export const downloadCatalogTemplate = (tipo: string): void => {
   const link = document.createElement('a')
-  link.href = `/api/catalogs/template/${tipo}`
+  link.href = `/api/v1/catalogs/template/${tipo}`
   link.download = ''
   link.click()
 }
 
 export const exportAprendizaje = (): void => {
   const link = document.createElement('a')
-  link.href = '/api/catalogs/aprendizaje/export'
+  link.href = '/api/v1/catalogs/aprendizaje/export'
   link.download = ''
   link.click()
 }

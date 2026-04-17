@@ -17,7 +17,7 @@ if str(_nemo_oc_dir) not in sys.path:
 from app.config import load_config, save_config
 from .schemas import ConfigOut, ConfigIn
 
-router = APIRouter(prefix="/api/config", tags=["config"])
+router = APIRouter(prefix="/api/v1/config", tags=["config"])
 
 
 def _prepare_config_out(cfg_dict: dict) -> ConfigOut:

@@ -32,7 +32,7 @@ from .schemas import (
     HoldingUpdateIn,
 )
 
-router = APIRouter(prefix="/api/holdings", tags=["holdings"])
+router = APIRouter(prefix="/api/v1/holdings", tags=["holdings"])
 
 
 def _serialize_holding(item) -> HoldingOut:

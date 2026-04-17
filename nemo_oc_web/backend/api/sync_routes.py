@@ -24,7 +24,7 @@ from app.config import load_config
 
 from .schemas import SyncMpIn, SyncGmailIn, SyncStartOut, ArtikosSyncIn, ArtikosSyncOut
 
-router = APIRouter(prefix="/api/sync", tags=["sync"])
+router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
 
 # Almacena queues activas: sync_id → queue.Queue
 _active: Dict[str, queue.Queue] = {}

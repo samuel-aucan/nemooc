@@ -36,7 +36,7 @@ export function useSyncSSE(syncId: string | null, path: 'mercado-publico' | 'gma
     }
 
     const connectSSE = () => {
-      const es = new EventSource(`/api/sync/${path}/${syncId}/progress`)
+      const es = new EventSource(`/api/v1/sync/${path}/${syncId}/progress`)
       esRef.current = es
 
       es.addEventListener('log', (event) => {

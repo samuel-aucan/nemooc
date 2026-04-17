@@ -34,7 +34,7 @@ from .schemas import (
     AuthUserOut,
 )
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 MAX_LOGIN_ATTEMPTS = int(os.getenv("NEMOOC_LOGIN_MAX_ATTEMPTS", "5"))
 LOGIN_BLOCK_MINUTES = int(os.getenv("NEMOOC_LOGIN_BLOCK_MINUTES", "15"))

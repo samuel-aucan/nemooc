@@ -29,7 +29,7 @@ from .schemas import (
     AuditoriaResponse, OcAuditoriaItem,
 )
 
-router = APIRouter(prefix="/api/ocs", tags=["ocs"])
+router = APIRouter(prefix="/api/v1/ocs", tags=["ocs"])
 
 
 def _enrich_oc(oc, holdings_map: dict | None = None) -> dict:
