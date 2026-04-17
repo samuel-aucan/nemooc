@@ -262,6 +262,122 @@ def download_catalog_template(catalog_type: str):
     )
 
 
+@router.get("/aprendizaje/export")
+def export_aprendizaje():
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill
+    except ImportError:
+        raise HTTPException(500, detail="openpyxl no disponible")
+
+    conn = None
+    try:
+        from app.db import get_connection
+        conn = get_connection()
+        rows = conn.execute("""
+            SELECT descripcion_comprador, itemcode_sap, descripcion_nemo,
+                   rut_comprador, frecuencia
+            FROM licitaciones_ref
+            ORDER BY frecuencia DESC, descripcion_norm
+        """).fetchall()
+    finally:
+        if conn:
+            conn.close()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Aprendizaje"
+
+    headers = ["descripcion_comprador", "itemcode_sap", "descripcion_nemo", "rut_comprador", "frecuencia"]
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="1e3a5f")
+    for col_idx, h in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        ws.column_dimensions[cell.column_letter].width = max(20, len(h) + 4)
+
+    for row_idx, row in enumerate(rows, start=2):
+        ws.cell(row=row_idx, column=1, value=row["descripcion_comprador"] or "")
+        ws.cell(row=row_idx, column=2, value=row["itemcode_sap"] or "")
+        ws.cell(row=row_idx, column=3, value=row["descripcion_nemo"] or "")
+        ws.cell(row=row_idx, column=4, value=row["rut_comprador"] or "")
+        ws.cell(row=row_idx, column=5, value=int(row["frecuencia"] or 1))
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=\"aprendizaje_nemooc.xlsx\""},
+    )
+
+
+@router.post("/aprendizaje/import", response_model=CatalogImportOut)
+async def import_aprendizaje(file: UploadFile = File(...)):
+    try:
+        import openpyxl
+    except ImportError:
+        raise HTTPException(500, detail="openpyxl no disponible")
+
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.worksheets[0]
+        header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+        headers = [str(c or "").strip().lower() for c in header_row]
+
+        col = {}
+        for i, h in enumerate(headers):
+            if "descripcion_comprador" in h:
+                col["desc"] = i
+            elif "itemcode" in h:
+                col["itemcode"] = i
+            elif "descripcion_nemo" in h:
+                col["nemo"] = i
+            elif "rut" in h:
+                col["rut"] = i
+            elif "frecuencia" in h:
+                col["freq"] = i
+
+        if "desc" not in col or "itemcode" not in col:
+            return CatalogImportOut(imported=0, errors=["Columnas requeridas no encontradas: descripcion_comprador, itemcode_sap"])
+
+        from app.repositories.licitaciones_repo import upsert_from_assignment
+
+        imported = 0
+        errors = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            try:
+                desc = str(row[col["desc"]] or "").strip()
+                itemcode = str(row[col["itemcode"]] or "").strip()
+                if not desc or not itemcode:
+                    continue
+                nemo = str(row[col["nemo"]] or "").strip() if "nemo" in col else ""
+                rut = str(row[col["rut"]] or "").strip() if "rut" in col else ""
+                freq = int(row[col["freq"]] or 1) if "freq" in col else 1
+                for _ in range(max(1, freq)):
+                    upsert_from_assignment(
+                        descripcion_comprador=desc,
+                        itemcode_sap=itemcode,
+                        rut_comprador=rut,
+                        descripcion_nemo=nemo,
+                    )
+                imported += 1
+            except Exception as e:
+                errors.append(str(e))
+
+        wb.close()
+        from app.services.licitaciones_service import get_licitaciones_service
+        get_licitaciones_service().reload()
+        return CatalogImportOut(imported=imported, errors=errors[:5])
+
+    except Exception as e:
+        raise HTTPException(400, detail=f"Error leyendo archivo: {e}")
+
+
 @router.post("/private/{holding_id}", response_model=CatalogImportOut)
 async def upload_private_catalog(holding_id: str, file: UploadFile = File(...)):
     from app.services.private_catalog_service import import_private_catalog, list_private_holdings

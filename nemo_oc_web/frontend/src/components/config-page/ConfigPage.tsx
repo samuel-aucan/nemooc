@@ -4,7 +4,9 @@ import { Download, Eye, EyeOff, FileText, Palette, Save, Upload } from 'lucide-r
 
 import {
   downloadCatalogTemplate,
+  exportAprendizaje,
   getCatalogStats,
+  importAprendizaje,
   uploadCartera,
   uploadCorreos,
   uploadHomologacion,
@@ -307,6 +309,13 @@ export default function ConfigPage() {
                 </div>
               </section>
 
+              <section className="card">
+                <div className="card-header">Aprendizaje del motor</div>
+                <div className="card-body">
+                  <AprendizajeRow count={stats?.licitaciones} onDone={refetchStats} />
+                </div>
+              </section>
+
               <div className="section-note">
                 Los catalogos por holding ya no se cargan aqui. Ahora se suben directamente dentro del modulo Holdings,
                 junto a los RUTs y correos esperados de cada grupo.
@@ -447,6 +456,50 @@ function CatalogRow({
     </div>
   )
 }
+
+function AprendizajeRow({ count, onDone }: { count?: number; onDone: () => void }) {
+  const ref = useRef<HTMLInputElement>(null)
+  const [status, setStatus] = useState('')
+
+  const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    setStatus('Importando...')
+    try {
+      const response = await importAprendizaje(file)
+      setStatus(response.errors.length ? response.errors[0] : `${response.imported} registro(s) importados`)
+      onDone()
+    } catch (error: unknown) {
+      setStatus(error instanceof Error ? error.message : 'Error al importar')
+    }
+    setTimeout(() => setStatus(''), 6000)
+  }
+
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-gray-800 bg-gray-950/50 px-4 py-4 md:flex-row md:items-center md:justify-between">
+      <div>
+        <div className="text-sm font-medium text-gray-100">Historial de asignaciones</div>
+        <div className="mt-1 text-sm text-gray-500">
+          {count !== undefined ? `${count.toLocaleString()} registro(s) acumulados` : 'Cargando...'}
+          {' — '}Exporta para migrar el aprendizaje a otra instancia
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        {status && <span className="text-sm text-gray-400">{status}</span>}
+        <input ref={ref} type="file" accept=".xlsx" className="hidden" onChange={handleImport} />
+        <button className="btn-ghost" onClick={exportAprendizaje} title="Descargar aprendizaje como Excel">
+          <Download size={14} />
+          Exportar
+        </button>
+        <button className="btn-secondary" onClick={() => ref.current?.click()}>
+          <Upload size={14} />
+          Importar .xlsx
+        </button>
+      </div>
+    </div>
+  )
+}
+
 
 function Field({
   label,

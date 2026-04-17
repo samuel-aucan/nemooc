@@ -65,3 +65,12 @@ export const downloadCatalogTemplate = (tipo: string): void => {
   link.download = ''
   link.click()
 }
+
+export const exportAprendizaje = (): void => {
+  const link = document.createElement('a')
+  link.href = '/api/catalogs/aprendizaje/export'
+  link.download = ''
+  link.click()
+}
+
+export const importAprendizaje = (f: File) => uploadCatalog('aprendizaje/import', f)
