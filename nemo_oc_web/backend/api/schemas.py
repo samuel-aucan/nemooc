@@ -34,6 +34,9 @@ class OrdenCompraOut(BaseModel):
     direccion_unidad: str
     comuna_unidad: str
     region_unidad: str
+    codigo_licitacion: str
+    direccion_despacho: str
+    direccion_facturacion: str
     codigo_proveedor: str
     nombre_proveedor: str
     rut_proveedor: str
@@ -46,6 +49,7 @@ class OrdenCompraOut(BaseModel):
     cartera: str = ""
     region_nombre: str = ""
     razon_social: str = ""
+    holding_nombre: str = ""
 
 
 class LineaOCOut(BaseModel):
@@ -100,14 +104,20 @@ class AnalyticsSummaryOut(BaseModel):
     cobertura_monto_pct: float
     cola_revision: int
     total_cola_sin_limite: int
-    pendientes_con_sugerencia: int
-    pendientes_sin_sugerencia: int
+    pendientes_con_texto: int
+    pendientes_sin_texto: int
+
+
+class HoldingOut(BaseModel):
+    id: str
+    nombre: str
 
 
 class FiltrosOut(BaseModel):
     estados_mp: List[str]
     tipos: List[str]
     carteras: List[str]
+    holdings: List[HoldingOut] = []
 
 
 class SapTextOut(BaseModel):
@@ -169,10 +179,12 @@ class AuthUserOut(BaseModel):
     activo: bool
     last_login_at: str
     must_reset_password: bool = False
+    auth_disabled: bool = False
 
 
 class AuthBootstrapStatusOut(BaseModel):
     requires_setup: bool
+    auth_disabled: bool = False
 
 
 class AuthLoginIn(BaseModel):
@@ -218,6 +230,24 @@ class AuthCompleteResetIn(BaseModel):
     password_confirm: str
 
 
+# ── Auditoría ────────────────────────────────────────────────────────────────
+
+class OcAuditoriaItem(BaseModel):
+    codigo_oc: str
+    tipo_oc: str
+    estado_mp: str
+    estado_interno: str
+    fecha_envio: str
+    nombre_organismo: str
+    total_neto: float
+    moneda: str
+
+
+class AuditoriaResponse(BaseModel):
+    aceptadas_sin_ingresar: List[OcAuditoriaItem]
+    ingresadas_sin_aceptar: List[OcAuditoriaItem]
+
+
 # ── Estado / Notas ───────────────────────────────────────────────────────────
 
 class EstadoIn(BaseModel):
@@ -244,9 +274,22 @@ class SyncStartOut(BaseModel):
     sync_id: str
 
 
+class ArtikosSyncIn(BaseModel):
+    url: str  # link completo del email Artikos
+
+
+class ArtikosSyncOut(BaseModel):
+    ok: bool
+    codigo_oc: str = ""
+    nombre_organismo: str = ""
+    cantidad_lineas: int = 0
+    message: str
+
+
 # ── Config ───────────────────────────────────────────────────────────────────
 
 class ConfigOut(BaseModel):
+    auth_enabled: bool
     api_ticket: str
     codigo_empresa: str
     rut_proveedor: str
@@ -270,12 +313,14 @@ class ConfigOut(BaseModel):
     imap_server: str
     imap_port: int
     imap_folder: str
-    imap_filter_subject: str
+    imap_filter_from: str
     licitaciones_path: str
     sap_columns: List[str]
+    oc_list_columns: List[str]
 
 
 class ConfigIn(BaseModel):
+    auth_enabled: Optional[bool] = None
     api_ticket: Optional[str] = None
     codigo_empresa: Optional[str] = None
     rut_proveedor: Optional[str] = None
@@ -297,10 +342,11 @@ class ConfigIn(BaseModel):
     imap_server: Optional[str] = None
     imap_port: Optional[int] = None
     imap_folder: Optional[str] = None
-    imap_filter_subject: Optional[str] = None
+    imap_filter_from: Optional[str] = None
     redsalud_homo_path: Optional[str] = None
     licitaciones_path: Optional[str] = None
     sap_columns: Optional[List[str]] = None
+    oc_list_columns: Optional[List[str]] = None
 
 
 # ── Catálogos ─────────────────────────────────────────────────────────────────

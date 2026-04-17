@@ -25,6 +25,9 @@ export interface OrdenCompra {
   direccion_unidad: string
   comuna_unidad: string
   region_unidad: string
+  codigo_licitacion: string
+  direccion_despacho: string
+  direccion_facturacion: string
   codigo_proveedor: string
   nombre_proveedor: string
   rut_proveedor: string
@@ -36,6 +39,7 @@ export interface OrdenCompra {
   cartera: string
   region_nombre: string
   razon_social: string
+  holding_nombre: string
 }
 
 export interface LineaOC {
@@ -75,10 +79,16 @@ export interface Stats {
   ingresadas: number
 }
 
+export interface HoldingFiltro {
+  id: string
+  nombre: string
+}
+
 export interface Filtros {
   estados_mp: string[]
   tipos: string[]
   carteras: string[]
+  holdings: HoldingFiltro[]
 }
 
 export interface Sugerencia {
@@ -105,8 +115,8 @@ export interface AnalyticsSummary {
   cobertura_monto_pct: number
   cola_revision: number
   total_cola_sin_limite: number
-  pendientes_con_sugerencia: number
-  pendientes_sin_sugerencia: number
+  pendientes_con_texto: number
+  pendientes_sin_texto: number
 }
 
 export interface ReviewQueueItem {
@@ -132,4 +142,20 @@ export interface ReviewQueueItem {
 export interface AnalyticsResponse {
   summary: AnalyticsSummary
   queue: ReviewQueueItem[]
+}
+
+export interface OcAuditoriaItem {
+  codigo_oc: string
+  tipo_oc: string
+  estado_mp: string
+  estado_interno: string
+  fecha_envio: string
+  nombre_organismo: string
+  total_neto: number
+  moneda: string
+}
+
+export interface AuditoriaResponse {
+  aceptadas_sin_ingresar: OcAuditoriaItem[]
+  ingresadas_sin_aceptar: OcAuditoriaItem[]
 }

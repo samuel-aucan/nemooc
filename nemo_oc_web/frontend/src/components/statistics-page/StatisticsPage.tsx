@@ -7,6 +7,7 @@ import { Link } from 'react-router-dom'
 import { searchMaestra } from '../../api/catalogs'
 import { asignarItemcode, getAnalytics, getSugerencias, limpiarAsignacion } from '../../api/ocs'
 import type { AnalyticsResponse, ReviewQueueItem, Sugerencia } from '../../types/oc'
+import { hasSelectedText } from '../../utils/clipboard'
 import { estadoInternoBgClass, fmtDate, fmtMoney, homoBadge } from '../../utils/formatters'
 
 const today = () => format(new Date(), 'yyyy-MM-dd')
@@ -31,7 +32,7 @@ export default function StatisticsPage() {
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['ocs-analytics', fechaDesde, fechaHasta],
     queryFn: () => getAnalytics({ fecha_desde: fechaDesde, fecha_hasta: fechaHasta, limit: QUEUE_LIMIT }),
-    staleTime: 30_000,
+    staleTime: 5 * 60_000,
   })
 
   const filteredQueue = useMemo(() => {
@@ -129,14 +130,14 @@ export default function StatisticsPage() {
           lineas_sugeridas: newSugeridas,
           cola_revision: Math.max(0, old.summary.cola_revision - queueDelta),
           total_cola_sin_limite: Math.max(0, old.summary.total_cola_sin_limite - queueDelta),
-          pendientes_con_sugerencia: wasPending && hadSugerencia
-            ? Math.max(0, old.summary.pendientes_con_sugerencia - 1)
-            : old.summary.pendientes_con_sugerencia,
-          pendientes_sin_sugerencia: wasPending && !hadSugerencia
-            ? Math.max(0, old.summary.pendientes_sin_sugerencia - 1)
-            : old.summary.pendientes_sin_sugerencia,
+          pendientes_con_texto: wasPending && hadSugerencia
+            ? Math.max(0, old.summary.pendientes_con_texto - 1)
+            : old.summary.pendientes_con_texto,
+          pendientes_sin_texto: wasPending && !hadSugerencia
+            ? Math.max(0, old.summary.pendientes_sin_texto - 1)
+            : old.summary.pendientes_sin_texto,
           cobertura_lineas_pct: old.summary.total_lineas > 0
-            ? Math.round((newResueltas / old.summary.total_lineas) * 1000) / 10
+            ? Math.round((newResueltas / old.summary.total_lineas) * 100 * 10) / 10
             : 0,
         },
       }
@@ -243,16 +244,16 @@ export default function StatisticsPage() {
             />
             <MetricCard
               icon={<BrainCircuit size={16} />}
-              label="Pendientes con sugerencia"
-              value={summary?.pendientes_con_sugerencia ?? 0}
+              label="Pendientes con texto buscable"
+              value={summary?.pendientes_con_texto ?? 0}
               helper="Clic para filtrar"
               tone="blue"
               onClick={() => setQueueMode('con_sugerencia')}
             />
             <MetricCard
               icon={<Wand2 size={16} />}
-              label="Pendientes sin sugerencia"
-              value={summary?.pendientes_sin_sugerencia ?? 0}
+              label="Pendientes sin texto"
+              value={summary?.pendientes_sin_texto ?? 0}
               helper="Clic para filtrar"
               tone="amber"
               onClick={() => setQueueMode('sin_sugerencia')}
@@ -415,7 +416,10 @@ function ExpertQueueRow({
     <>
       <tr
         className={`${expanded ? 'bg-blue-950/15' : isPending ? 'bg-gray-950/10' : ''} cursor-pointer`}
-        onClick={onToggle}
+        onClick={() => {
+          if (hasSelectedText()) return
+          onToggle()
+        }}
       >
         <td>
           <button

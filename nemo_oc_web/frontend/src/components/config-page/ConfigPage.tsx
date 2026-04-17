@@ -1,8 +1,9 @@
 import { useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Eye, EyeOff, FileText, Palette, Save, Upload } from 'lucide-react'
+import { Download, Eye, EyeOff, FileText, Palette, Save, Upload } from 'lucide-react'
 
 import {
+  downloadCatalogTemplate,
   getCatalogStats,
   uploadCartera,
   uploadCorreos,
@@ -242,11 +243,11 @@ export default function ConfigPage() {
                       onChange={(event) => set('imap_folder', event.target.value)}
                     />
                   </Field>
-                  <Field label="Filtro por asunto" helper="Ejemplo: ORDEN DE COMPRA">
+                  <Field label="Filtro por remitente" helper="Ejemplo: ordenesdecompra@nemochile.cl">
                     <input
                       className="input"
-                      value={(get('imap_filter_subject') as string) || ''}
-                      onChange={(event) => set('imap_filter_subject', event.target.value)}
+                      value={(get('imap_filter_from') as string) || ''}
+                      onChange={(event) => set('imap_filter_from', event.target.value)}
                     />
                   </Field>
                 </div>
@@ -297,12 +298,12 @@ export default function ConfigPage() {
               <section className="card">
                 <div className="card-header">Catalogos generales</div>
                 <div className="card-body space-y-2">
-                  <CatalogRow label="Homologacion CM" count={stats?.homologacion_cm} uploadFn={uploadHomologacion} onDone={refetchStats} />
-                  <CatalogRow label="Maestra SAP" count={stats?.homologacion_sap} uploadFn={uploadMaestra} onDone={refetchStats} />
-                  <CatalogRow label="Cartera de clientes" count={stats?.cartera} uploadFn={uploadCartera} onDone={refetchStats} />
-                  <CatalogRow label="Correos de vendedores" uploadFn={uploadCorreos} onDone={refetchStats} />
-                  <CatalogRow label="Homo RedSalud legacy" count={stats?.redsalud} uploadFn={uploadRedsalud} onDone={refetchStats} />
-                  <CatalogRow label="Licitaciones (lic.xlsx)" count={stats?.licitaciones} uploadFn={uploadLicitaciones} onDone={refetchStats} />
+                  <CatalogRow label="Homologacion CM" templateKey="homologacion" count={stats?.homologacion_cm} uploadFn={uploadHomologacion} onDone={refetchStats} />
+                  <CatalogRow label="Maestra SAP" templateKey="maestra" count={stats?.homologacion_sap} uploadFn={uploadMaestra} onDone={refetchStats} />
+                  <CatalogRow label="Cartera de clientes" templateKey="cartera" count={stats?.cartera} uploadFn={uploadCartera} onDone={refetchStats} />
+                  <CatalogRow label="Correos de vendedores" templateKey="correos" uploadFn={uploadCorreos} onDone={refetchStats} />
+                  <CatalogRow label="Homo RedSalud legacy" templateKey="redsalud" count={stats?.redsalud} uploadFn={uploadRedsalud} onDone={refetchStats} />
+                  <CatalogRow label="Licitaciones (lic.xlsx)" templateKey="licitaciones" count={stats?.licitaciones} uploadFn={uploadLicitaciones} onDone={refetchStats} />
                 </div>
               </section>
 
@@ -390,11 +391,13 @@ export default function ConfigPage() {
 
 function CatalogRow({
   label,
+  templateKey,
   count,
   uploadFn,
   onDone,
 }: {
   label: string
+  templateKey: string
   count?: number
   uploadFn: (file: File) => Promise<{ imported: number; errors: string[] }>
   onDone: () => void
@@ -425,9 +428,17 @@ function CatalogRow({
         {count !== undefined && <div className="mt-1 text-sm text-gray-500">{count.toLocaleString()} registro(s)</div>}
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2">
         {status && <span className="text-sm text-gray-400">{status}</span>}
         <input ref={ref} type="file" accept=".xlsx" className="hidden" onChange={handleFile} />
+        <button
+          className="btn-ghost"
+          onClick={() => downloadCatalogTemplate(templateKey)}
+          title="Descargar plantilla Excel con las columnas requeridas"
+        >
+          <Download size={14} />
+          Plantilla
+        </button>
         <button className="btn-secondary" onClick={() => ref.current?.click()}>
           <Upload size={14} />
           Subir .xlsx

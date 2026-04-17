@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Optional, List
 from datetime import datetime
+import re
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -14,28 +15,88 @@ if str(_nemo_oc_dir) not in sys.path:
     sys.path.insert(0, str(_nemo_oc_dir))
 
 from app.repositories import oc_repository
+from app.config import load_config
 from app.utils.clipboard_utils import generar_texto_sap
 from app.services.cartera_service import get_cartera_service
 from app.services.licitaciones_service import get_licitaciones_service
+from app.services.mp_api_service import MercadoPublicoAPI
+from app.services.mp_portal_service import get_public_oc_portal_meta
 
 from .schemas import (
-    OrdenCompraOut, LineaOCOut, OcDetailOut, StatsOut, FiltrosOut,
+    OrdenCompraOut, LineaOCOut, OcDetailOut, StatsOut, FiltrosOut, HoldingOut,
     SapTextOut, AsignarItemcodeIn, EstadoIn, NotasIn, SugerenciaOut,
     CatalogImportOut, AnalyticsOut, AnalyticsSummaryOut, ReviewQueueItemOut,
+    AuditoriaResponse, OcAuditoriaItem,
 )
 
 router = APIRouter(prefix="/api/ocs", tags=["ocs"])
 
 
-def _enrich_oc(oc) -> dict:
-    """Añade campos de cartera a una OC."""
+def _enrich_oc(oc, holdings_map: dict | None = None) -> dict:
+    """Añade campos de cartera y holding a una OC."""
     d = oc.__dict__.copy()
     cartera_svc = get_cartera_service()
     cliente = cartera_svc.lookup(oc.cliente_sap_sugerido) if oc.cliente_sap_sugerido else None
-    d["cartera"]     = cliente.cartera if cliente else ""
+    d["cartera"]       = cliente.cartera if cliente else ""
     d["region_nombre"] = cliente.region_nombre if cliente else ""
     d["razon_social"]  = cliente.razon if cliente else ""
+    if holdings_map is None:
+        holdings_map = oc_repository.get_holdings_map()
+    d["holding_nombre"] = holdings_map.get(oc.codigo_organismo, "") if oc.codigo_organismo else ""
     return d
+
+
+def _looks_like_public_oc(codigo_oc: str) -> bool:
+    return bool(re.search(r"-[A-Z]{2,4}\d{2}$", (codigo_oc or "").upper()))
+
+
+def _looks_generic_address(value: str) -> bool:
+    normalized = (value or "").strip().lower()
+    return normalized in {
+        "",
+        "sin dirección registrada para unidad de compra",
+        "sin direccion registrada para unidad de compra",
+        "bienes y servicios",
+    }
+
+
+def _enrich_public_metadata(oc) -> None:
+    if not _looks_like_public_oc(oc.codigo_oc):
+        return
+
+    updated = False
+
+    if not (oc.codigo_licitacion or "").strip():
+        try:
+            cfg = load_config()
+            if cfg.api_ticket:
+                raw = MercadoPublicoAPI(cfg.api_ticket, cfg.codigo_empresa).obtener_detalle_oc(oc.codigo_oc)
+                codigo_licitacion = str(raw.get("CodigoLicitacion", "") or "").strip()
+                if codigo_licitacion:
+                    oc.codigo_licitacion = codigo_licitacion
+                    updated = True
+        except Exception:
+            pass
+
+    needs_despacho = _looks_generic_address(oc.direccion_despacho)
+    needs_facturacion = _looks_generic_address(oc.direccion_facturacion)
+
+    if needs_despacho or needs_facturacion:
+        portal_meta = get_public_oc_portal_meta(oc.codigo_oc)
+        if portal_meta.direccion_despacho and needs_despacho:
+            oc.direccion_despacho = portal_meta.direccion_despacho
+            updated = True
+        if portal_meta.direccion_facturacion and needs_facturacion:
+            oc.direccion_facturacion = portal_meta.direccion_facturacion
+            updated = True
+
+    if updated:
+        oc_repository.actualizar_campos_publicos(
+            oc.codigo_oc,
+            codigo_licitacion=oc.codigo_licitacion or "",
+            direccion_despacho=oc.direccion_despacho or "",
+            direccion_facturacion=oc.direccion_facturacion or "",
+        )
 
 
 # ── Lista ────────────────────────────────────────────────────────────────────
@@ -46,6 +107,7 @@ def list_ocs(
     estado_mp:  List[str] = Query(default=[]),
     tipo_oc:    List[str] = Query(default=[]),
     cartera:    List[str] = Query(default=[]),
+    holding:    List[str] = Query(default=[]),
     fecha_desde: Optional[str] = Query(None),
     fecha_hasta: Optional[str] = Query(None),
     busqueda:   Optional[str] = Query(None),
@@ -57,8 +119,10 @@ def list_ocs(
         busqueda=busqueda,
         estado_mp=estado_mp or None,
         tipo_oc=tipo_oc or None,
+        holding=holding or None,
     )
-    enriched = [OrdenCompraOut(**_enrich_oc(oc)) for oc in ocs]
+    holdings_map = oc_repository.get_holdings_map()
+    enriched = [OrdenCompraOut(**_enrich_oc(oc, holdings_map)) for oc in ocs]
     if cartera:
         enriched = [o for o in enriched if o.cartera in cartera]
     return enriched
@@ -76,10 +140,14 @@ def get_filtros():
         c.cartera for c in cartera_svc._catalog.values() if c.cartera
     }) if hasattr(cartera_svc, "_catalog") else []
 
+    raw_holdings = oc_repository.get_distinct_holdings()
+    holdings = [HoldingOut(id=h["id"], nombre=h["nombre"]) for h in raw_holdings]
+
     return FiltrosOut(
         estados_mp=oc_repository.get_distinct_estados_mp(),
         tipos=oc_repository.get_distinct_tipos(),
         carteras=carteras,
+        holdings=holdings,
     )
 
 
@@ -106,13 +174,11 @@ def get_analytics(
         limit=limit,
     )
 
-    pendientes_con_sugerencia = 0
-    pendientes_sin_sugerencia = 0
     queue: list[ReviewQueueItemOut] = []
 
     for row in queue_rows:
         cliente = cartera_svc.lookup(row["cliente_sap_sugerido"]) if row["cliente_sap_sugerido"] else None
-        is_pending = (row["estado_homologacion"] or "pendiente") == "pendiente" or not row["itemcode_sap"]
+        is_pending = (row["estado_homologacion"] or "pendiente") == "pendiente" or not (row["itemcode_sap"] or "").strip()
 
         sugerencia_principal = None
         if is_pending:
@@ -133,11 +199,6 @@ def get_analytics(
                         score=top.score,
                         estrellas=max(1, round(top.score * 5)),
                     )
-                    pendientes_con_sugerencia += 1
-                else:
-                    pendientes_sin_sugerencia += 1
-            else:
-                pendientes_sin_sugerencia += 1
 
         queue.append(
             ReviewQueueItemOut(
@@ -166,10 +227,23 @@ def get_analytics(
             **summary,
             cola_revision=len(queue),
             total_cola_sin_limite=total_cola_sin_limite,
-            pendientes_con_sugerencia=pendientes_con_sugerencia,
-            pendientes_sin_sugerencia=pendientes_sin_sugerencia,
         ),
         queue=queue,
+    )
+
+
+@router.get("/auditoria", response_model=AuditoriaResponse)
+def get_auditoria(
+    fecha_desde: Optional[str] = Query(None),
+    fecha_hasta: Optional[str] = Query(None),
+):
+    data = oc_repository.get_auditoria(
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+    )
+    return AuditoriaResponse(
+        aceptadas_sin_ingresar=[OcAuditoriaItem(**r) for r in data["aceptadas_sin_ingresar"]],
+        ingresadas_sin_aceptar=[OcAuditoriaItem(**r) for r in data["ingresadas_sin_aceptar"]],
     )
 
 
@@ -232,6 +306,7 @@ def get_oc(codigo_oc: str):
     oc = oc_repository.get_oc(codigo_oc)
     if not oc:
         raise HTTPException(404, detail=f"OC {codigo_oc} no encontrada")
+    _enrich_public_metadata(oc)
     lineas = oc_repository.get_lineas(codigo_oc)
     return OcDetailOut(
         cabecera=OrdenCompraOut(**_enrich_oc(oc)),
@@ -329,6 +404,24 @@ def asignar_itemcode(codigo_oc: str, correlativo: int, body: AsignarItemcodeIn):
         conn.commit()
     finally:
         conn.close()
+
+    # Retroalimentar licitaciones_ref para mejorar sugerencias futuras
+    try:
+        oc = oc_repository.get_oc(codigo_oc)
+        lineas = oc_repository.get_lineas(codigo_oc)
+        linea = next((l for l in lineas if l.correlativo == correlativo), None)
+        if oc and linea:
+            from app.repositories.licitaciones_repo import upsert_from_assignment
+            desc = linea.especificacion_comprador or linea.producto or ""
+            upsert_from_assignment(
+                descripcion_comprador=desc,
+                itemcode_sap=body.itemcode_sap,
+                rut_comprador=oc.rut_unidad or "",
+                descripcion_nemo=body.descripcion_sap or "",
+            )
+    except Exception:
+        pass  # No bloquear la asignación si falla el aprendizaje
+
     return {"ok": True}
 
 
@@ -349,6 +442,38 @@ def limpiar_asignacion(codigo_oc: str, correlativo: int):
     finally:
         conn.close()
     return {"ok": True}
+
+
+@router.post("/{codigo_oc}/rehomologar-privada")
+def rehomologar_privada(codigo_oc: str):
+    """Re-ejecuta el lookup del catálogo privado sobre las líneas sin itemcode."""
+    from app.services.private_holding_service import lookup_private_catalog
+
+    oc = oc_repository.get_oc(codigo_oc)
+    if not oc:
+        raise HTTPException(404, "OC no encontrada")
+    if oc.tipo_oc != "PRIVADA":
+        raise HTTPException(400, "Solo aplica a OCs privadas")
+
+    holding_id = oc.codigo_organismo
+    lineas = oc_repository.get_lineas(codigo_oc)
+    actualizadas = 0
+
+    for linea in lineas:
+        if linea.itemcode_sap or not linea.codigo_mp:
+            continue
+        homo = lookup_private_catalog(holding_id, linea.codigo_mp)
+        if homo and homo.itemcode_sap:
+            oc_repository.asignar_itemcode_linea(
+                codigo_oc,
+                linea.correlativo,
+                homo.itemcode_sap,
+                homo.descripcion or "",
+                origen="homologado",
+            )
+            actualizadas += 1
+
+    return {"actualizadas": actualizadas}
 
 
 @router.get("/{codigo_oc}/lineas/{correlativo}/sugerencias", response_model=list[SugerenciaOut])

@@ -37,13 +37,14 @@ def save_oc(oc: OrdenCompra, lineas: List[LineaOC]) -> None:
                 codigo_organismo, nombre_organismo,
                 rut_unidad, codigo_unidad, nombre_unidad,
                 direccion_unidad, comuna_unidad, region_unidad,
+                codigo_licitacion, direccion_despacho, direccion_facturacion,
                 codigo_proveedor, nombre_proveedor, rut_proveedor,
                 cliente_sap_sugerido, cantidad_lineas,
                 estado_interno, fecha_ingreso, notas,
                 created_at, updated_at
             ) VALUES (
                 ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?
             )
             ON CONFLICT(codigo_oc) DO UPDATE SET
                 nombre_oc                = excluded.nombre_oc,
@@ -56,6 +57,9 @@ def save_oc(oc: OrdenCompra, lineas: List[LineaOC]) -> None:
                 porcentaje_iva           = excluded.porcentaje_iva,
                 descuentos               = excluded.descuentos,
                 cargos                   = excluded.cargos,
+                codigo_licitacion        = excluded.codigo_licitacion,
+                direccion_despacho       = excluded.direccion_despacho,
+                direccion_facturacion    = excluded.direccion_facturacion,
                 cantidad_lineas          = excluded.cantidad_lineas,
                 updated_at               = excluded.updated_at
         """, (
@@ -67,6 +71,7 @@ def save_oc(oc: OrdenCompra, lineas: List[LineaOC]) -> None:
             oc.codigo_organismo, oc.nombre_organismo,
             oc.rut_unidad, oc.codigo_unidad, oc.nombre_unidad,
             oc.direccion_unidad, oc.comuna_unidad, oc.region_unidad,
+            oc.codigo_licitacion, oc.direccion_despacho, oc.direccion_facturacion,
             oc.codigo_proveedor, oc.nombre_proveedor, oc.rut_proveedor,
             oc.cliente_sap_sugerido, oc.cantidad_lineas,
             oc.estado_interno or "Nueva", oc.fecha_ingreso, oc.notas,
@@ -158,6 +163,46 @@ def guardar_notas(codigo_oc: str, notas: str) -> None:
         conn.close()
 
 
+def actualizar_campos_publicos(
+    codigo_oc: str,
+    *,
+    codigo_licitacion: Optional[str] = None,
+    direccion_despacho: Optional[str] = None,
+    direccion_facturacion: Optional[str] = None,
+) -> None:
+    updates = []
+    params = []
+    if codigo_licitacion is not None:
+        updates.append("codigo_licitacion = ?")
+        params.append(codigo_licitacion)
+    if direccion_despacho is not None:
+        updates.append("direccion_despacho = ?")
+        params.append(direccion_despacho)
+    if direccion_facturacion is not None:
+        updates.append("direccion_facturacion = ?")
+        params.append(direccion_facturacion)
+    if not updates:
+        return
+
+    conn = get_connection()
+    now = datetime.now().isoformat()
+    try:
+        updates.append("updated_at = ?")
+        params.append(now)
+        params.append(codigo_oc)
+        conn.execute(
+            f"""
+            UPDATE oc_cabecera
+            SET {", ".join(updates)}
+            WHERE codigo_oc = ?
+            """,
+            params,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Lectura
 # ---------------------------------------------------------------------------
@@ -179,8 +224,9 @@ def get_all_ocs(
     busqueda: Optional[str] = None,
     estado_mp=None,
     tipo_oc=None,
+    holding=None,
 ) -> List[OrdenCompra]:
-    """Retorna lista de OC según filtros opcionales. estado/estado_mp/tipo_oc pueden ser str o List[str]."""
+    """Retorna lista de OC según filtros opcionales. estado/estado_mp/tipo_oc/holding pueden ser str o List[str]."""
     conn = get_connection()
     try:
         sql = "SELECT * FROM oc_cabecera WHERE 1=1"
@@ -201,6 +247,7 @@ def get_all_ocs(
         _add_in_filter("estado_interno", estado)
         _add_in_filter("estado_mp", estado_mp)
         _add_in_filter("tipo_oc", tipo_oc)
+        _add_in_filter("codigo_organismo", holding)
         if fecha_desde:
             sql += " AND DATE(fecha_envio) >= DATE(?)"
             params.append(fecha_desde)
@@ -247,6 +294,35 @@ def get_distinct_tipos() -> List[str]:
         conn.close()
 
 
+def get_holdings_map() -> dict:
+    """Retorna dict {holding_id: nombre} desde la tabla holdings."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, nombre FROM holdings WHERE activo = 1"
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+    finally:
+        conn.close()
+
+
+def get_distinct_holdings() -> List[dict]:
+    """Retorna los holdings presentes en OCs privadas, con id y nombre."""
+    conn = get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT h.id, h.nombre
+            FROM holdings h
+            INNER JOIN oc_cabecera o ON h.id = o.codigo_organismo
+            WHERE o.tipo_oc = 'PRIVADA'
+            GROUP BY h.id, h.nombre
+            ORDER BY h.nombre
+        """).fetchall()
+        return [{"id": r[0], "nombre": r[1]} for r in rows]
+    finally:
+        conn.close()
+
+
 def get_oc(codigo_oc: str) -> Optional[OrdenCompra]:
     conn = get_connection()
     try:
@@ -262,7 +338,12 @@ def get_lineas(codigo_oc: str) -> List[LineaOC]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM oc_detalle WHERE codigo_oc = ? ORDER BY correlativo",
+            """
+            SELECT *
+            FROM oc_detalle
+            WHERE codigo_oc = ?
+            ORDER BY id ASC, correlativo ASC
+            """,
             (codigo_oc,)
         ).fetchall()
         return [_row_to_linea(r) for r in rows]
@@ -340,7 +421,23 @@ def get_analytics_summary(
                       OR COALESCE(l.estado_homologacion, 'pendiente') IN ('pendiente', 'manual')
                     THEN c.codigo_oc
                     ELSE NULL
-                END) AS ocs_por_revisar
+                END) AS ocs_por_revisar,
+                COALESCE(SUM(
+                    CASE
+                        WHEN COALESCE(TRIM(l.itemcode_sap), '') = ''
+                         AND (COALESCE(TRIM(l.especificacion_comprador), '') != ''
+                              OR COALESCE(TRIM(l.producto), '') != '')
+                        THEN 1 ELSE 0
+                    END
+                ), 0) AS pendientes_con_texto,
+                COALESCE(SUM(
+                    CASE
+                        WHEN COALESCE(TRIM(l.itemcode_sap), '') = ''
+                         AND COALESCE(TRIM(l.especificacion_comprador), '') = ''
+                         AND COALESCE(TRIM(l.producto), '') = ''
+                        THEN 1 ELSE 0
+                    END
+                ), 0) AS pendientes_sin_texto
             FROM oc_cabecera c
             LEFT JOIN oc_detalle l ON l.codigo_oc = c.codigo_oc
             WHERE 1=1
@@ -369,6 +466,8 @@ def get_analytics_summary(
             "lineas_sugeridas": int(row["lineas_sugeridas"] or 0),
             "lineas_homologadas": int(row["lineas_homologadas"] or 0),
             "ocs_por_revisar": int(row["ocs_por_revisar"] or 0),
+            "pendientes_con_texto": int(row["pendientes_con_texto"] or 0),
+            "pendientes_sin_texto": int(row["pendientes_sin_texto"] or 0),
             "monto_total": monto_total,
             "monto_resuelto": monto_resuelto,
             "cobertura_lineas_pct": round((lineas_resueltas / total_lineas) * 100, 1) if total_lineas else 0.0,
@@ -439,6 +538,52 @@ def get_review_queue(
         conn.close()
 
 
+def get_auditoria(
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+) -> dict:
+    """
+    Retorna dos grupos de OCs con discrepancias entre estado_mp y estado_interno:
+    - aceptadas_sin_ingresar: estado_mp='Aceptada' pero estado_interno != 'Ingresada'
+    - ingresadas_sin_aceptar: estado_interno='Ingresada' pero estado_mp != 'Aceptada'
+    """
+    conn = get_connection()
+    try:
+        base_fields = """
+            codigo_oc, tipo_oc, estado_mp, estado_interno,
+            fecha_envio, nombre_organismo, total_neto, moneda
+        """
+        date_filter = ""
+        date_params: list = []
+        if fecha_desde:
+            date_filter += " AND DATE(fecha_envio) >= DATE(?)"
+            date_params.append(fecha_desde)
+        if fecha_hasta:
+            date_filter += " AND DATE(fecha_envio) <= DATE(?)"
+            date_params.append(fecha_hasta)
+
+        rows_a = conn.execute(
+            f"SELECT {base_fields} FROM oc_cabecera "
+            f"WHERE estado_mp = 'Aceptada' AND estado_interno != 'Ingresada'"
+            f"{date_filter} ORDER BY fecha_envio DESC",
+            date_params,
+        ).fetchall()
+
+        rows_b = conn.execute(
+            f"SELECT {base_fields} FROM oc_cabecera "
+            f"WHERE estado_interno = 'Ingresada' AND estado_mp != 'Aceptada'"
+            f"{date_filter} ORDER BY fecha_envio DESC",
+            date_params,
+        ).fetchall()
+
+        return {
+            "aceptadas_sin_ingresar": [dict(r) for r in rows_a],
+            "ingresadas_sin_aceptar": [dict(r) for r in rows_b],
+        }
+    finally:
+        conn.close()
+
+
 def get_review_queue_count(
     fecha_desde: Optional[str] = None,
     fecha_hasta: Optional[str] = None,
@@ -465,6 +610,50 @@ def get_review_queue_count(
             params.append(fecha_hasta)
         row = conn.execute(sql, params).fetchone()
         return int(row["cnt"] or 0)
+    finally:
+        conn.close()
+
+
+def asignar_itemcode_linea(
+    codigo_oc: str,
+    correlativo: int,
+    itemcode_sap: str,
+    descripcion_sap: str = "",
+    origen: str = "manual",
+) -> None:
+    conn = get_connection()
+    now = datetime.now().isoformat()
+    _ESTADOS_VALIDOS = {"homologado", "sugerido", "manual"}
+    estado = origen if origen in _ESTADOS_VALIDOS else "manual"
+    try:
+        conn.execute(
+            """
+            UPDATE oc_detalle
+            SET itemcode_sap = ?, descripcion_sap = ?,
+                estado_homologacion = ?, updated_at = ?
+            WHERE codigo_oc = ? AND correlativo = ?
+            """,
+            (itemcode_sap, descripcion_sap or None, estado, now, codigo_oc, correlativo),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def limpiar_asignacion_linea(codigo_oc: str, correlativo: int) -> None:
+    conn = get_connection()
+    now = datetime.now().isoformat()
+    try:
+        conn.execute(
+            """
+            UPDATE oc_detalle
+            SET itemcode_sap = NULL, descripcion_sap = NULL,
+                estado_homologacion = 'pendiente', updated_at = ?
+            WHERE codigo_oc = ? AND correlativo = ?
+            """,
+            (now, codigo_oc, correlativo),
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -501,6 +690,9 @@ def _row_to_oc(r) -> OrdenCompra:
         direccion_unidad=r["direccion_unidad"] or "",
         comuna_unidad=r["comuna_unidad"] or "",
         region_unidad=r["region_unidad"] or "",
+        codigo_licitacion=r["codigo_licitacion"] or "",
+        direccion_despacho=r["direccion_despacho"] or "",
+        direccion_facturacion=r["direccion_facturacion"] or "",
         codigo_proveedor=r["codigo_proveedor"] or "",
         nombre_proveedor=r["nombre_proveedor"] or "",
         rut_proveedor=r["rut_proveedor"] or "",

@@ -1,11 +1,13 @@
 """
 Endpoints para carga de catálogos Excel y consulta de estadísticas.
 """
+import io
 import sys
 import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 _nemo_oc_dir = Path(__file__).parent.parent.parent.parent / "nemo_oc"
 if str(_nemo_oc_dir) not in sys.path:
@@ -184,6 +186,80 @@ def list_private_holdings_endpoint():
         )
         for item in list_private_holdings()
     ]
+
+
+_CATALOG_TEMPLATES: dict[str, dict] = {
+    "homologacion": {
+        "filename": "plantilla_homologacion.xlsx",
+        "columns": ["codigo_cm", "descripcion_cm", "itemcode_sap", "descripcion_sap", "familia", "subfamilia", "unidad_medida"],
+        "example": ["CM-001", "GUANTE LATEX TALLA M", "KNE00001", "GUANTE LATEX M NEMO", "Insumos", "Proteccion", "PAR"],
+    },
+    "maestra": {
+        "filename": "plantilla_maestra_sap.xlsx",
+        "columns": ["itemcode_sap", "descripcion_sap", "familia", "subfamilia", "unidad_medida", "precio_referencia"],
+        "example": ["KNE00001", "GUANTE LATEX M NEMO", "Insumos", "Proteccion", "PAR", "1500"],
+    },
+    "cartera": {
+        "filename": "plantilla_cartera.xlsx",
+        "columns": ["cod_cliente", "rut", "razon", "comuna", "region_nombre", "cartera", "vendedor"],
+        "example": ["C001", "12.345.678-9", "HOSPITAL EJEMPLO", "Santiago", "RM", "Cartera Norte", "Juan Perez"],
+    },
+    "correos": {
+        "filename": "plantilla_correos.xlsx",
+        "columns": ["email", "nombre", "holding", "activo"],
+        "example": ["oc@hospital.cl", "Hospital Ejemplo", "redsalud", "si"],
+    },
+    "redsalud": {
+        "filename": "plantilla_homo_redsalud.xlsx",
+        "columns": ["codigo_redsalud", "descripcion_redsalud", "itemcode_sap", "descripcion_sap"],
+        "example": ["RS-001", "GUANTE LATEX MEDIANO", "KNE00001", "GUANTE LATEX M NEMO"],
+    },
+    "licitaciones": {
+        "filename": "plantilla_licitaciones.xlsx",
+        "columns": ["descripcion_comprador", "descripcion_norm", "itemcode_sap", "descripcion_nemo", "rut_comprador", "frecuencia"],
+        "example": ["Guante látex mediano", "guante latex mediano", "KNE00001", "GUANTE LATEX M NEMO", "61.002.172-4", "1"],
+    },
+}
+
+
+@router.get("/template/{catalog_type}")
+def download_catalog_template(catalog_type: str):
+    if catalog_type not in _CATALOG_TEMPLATES:
+        raise HTTPException(404, detail=f"Tipo de catalogo desconocido: {catalog_type}")
+
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+    except ImportError:
+        raise HTTPException(500, detail="openpyxl no disponible")
+
+    tmpl = _CATALOG_TEMPLATES[catalog_type]
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Plantilla"
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="374151")
+
+    for col_idx, col_name in enumerate(tmpl["columns"], start=1):
+        cell = ws.cell(row=1, column=col_idx, value=col_name)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        ws.column_dimensions[cell.column_letter].width = max(18, len(col_name) + 4)
+
+    for col_idx, value in enumerate(tmpl["example"], start=1):
+        ws.cell(row=2, column=col_idx, value=value)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=\"{tmpl['filename']}\""},
+    )
 
 
 @router.post("/private/{holding_id}", response_model=CatalogImportOut)

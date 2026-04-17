@@ -58,3 +58,10 @@ export const searchCartera = (q: string, limit = 8) =>
   api
     .get<CarteraSearchResult[]>(`/catalogs/cartera/search?q=${encodeURIComponent(q)}&limit=${limit}`)
     .then(r => r.data)
+
+export const downloadCatalogTemplate = (tipo: string): void => {
+  const link = document.createElement('a')
+  link.href = `/api/catalogs/template/${tipo}`
+  link.download = ''
+  link.click()
+}

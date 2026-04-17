@@ -96,6 +96,9 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             direccion_unidad          TEXT,
             comuna_unidad             TEXT,
             region_unidad             TEXT,
+            codigo_licitacion         TEXT,
+            direccion_despacho        TEXT,
+            direccion_facturacion     TEXT,
             codigo_proveedor          TEXT,
             nombre_proveedor          TEXT,
             rut_proveedor             TEXT,
@@ -429,6 +432,17 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             ALTER TABLE usuarios ADD COLUMN reset_token_hash TEXT;
             ALTER TABLE usuarios ADD COLUMN reset_token_expires_at TEXT;
         """,
+        9: """
+            SELECT 1;
+        """,
+        10: """
+            CREATE INDEX IF NOT EXISTS idx_oc_detalle_codigo_oc
+                ON oc_detalle(codigo_oc);
+            CREATE INDEX IF NOT EXISTS idx_oc_detalle_estado_homo
+                ON oc_detalle(estado_homologacion);
+            CREATE INDEX IF NOT EXISTS idx_oc_detalle_itemcode
+                ON oc_detalle(itemcode_sap);
+        """,
     }
 
     for version in sorted(v for v in migrations if v > current):
@@ -442,6 +456,20 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     if current < 6:
         _seed_holdings(conn)
         _seed_holding_match_rules(conn)
+
+    _ensure_column(conn, "oc_cabecera", "codigo_licitacion", "TEXT")
+    _ensure_column(conn, "oc_cabecera", "direccion_despacho", "TEXT")
+    _ensure_column(conn, "oc_cabecera", "direccion_facturacion", "TEXT")
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    existing = {
+        row["name"]
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column in existing:
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _seed_holdings(conn: sqlite3.Connection) -> None:
