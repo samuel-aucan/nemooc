@@ -7,6 +7,11 @@
     box-sizing: border-box;
   }
 
+  body {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
   :root {
     color-scheme: dark;
     --accent-500: 59 130 246;
@@ -205,6 +210,8 @@
 
   .tbl thead th {
     @apply px-3 py-2.5 text-left font-semibold whitespace-nowrap;
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   .tbl tbody tr {
@@ -217,6 +224,14 @@
 
   .tbl tbody td {
     @apply px-3 py-2 align-top whitespace-nowrap overflow-hidden text-ellipsis max-w-[220px] leading-5;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  .copyable-text {
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
   }
 
   .badge {

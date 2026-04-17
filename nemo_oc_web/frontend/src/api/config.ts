@@ -1,6 +1,7 @@
 import api from './client'
 
 export interface AppConfig {
+  auth_enabled: boolean
   api_ticket: string
   codigo_empresa: string
   rut_proveedor: string
@@ -12,7 +13,7 @@ export interface AppConfig {
   imap_server: string
   imap_port: number
   imap_folder: string
-  imap_filter_subject: string
+  imap_filter_from: string
   auto_sync: boolean
   auto_sync_days: number
   auto_sync_interval: number
@@ -20,6 +21,7 @@ export interface AppConfig {
   theme: string
   color_theme: string
   sap_columns: string[]
+  oc_list_columns: string[]
   [key: string]: unknown
 }
 

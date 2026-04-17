@@ -13,7 +13,7 @@ from datetime import datetime
 from app.models.linea_oc import LineaOC
 from app.models.orden_compra import OrdenCompra
 from app.repositories import oc_repository
-from app.services.imap_service import buscar_ocs_gmail, limpiar_temporales
+from app.services.imap_service import buscar_artikos_emails_gmail, buscar_ocs_gmail, limpiar_temporales
 from app.services.private_holding_service import (
     detect_holding,
     lookup_private_catalog,
@@ -31,7 +31,7 @@ def run_sync_privado(
     imap_server: str,
     imap_port: int,
     imap_folder: str,
-    filter_subject: str,
+    filter_from: str,
     progress_queue: queue.Queue,
 ) -> None:
     """
@@ -39,6 +39,39 @@ def run_sync_privado(
     """
     def emit(tipo: str, **kwargs):
         progress_queue.put({"type": tipo, **kwargs})
+
+    emit("log", message="Buscando OCs Artikos en Gmail...")
+    try:
+        artikos_emails = buscar_artikos_emails_gmail(
+            smtp_user=smtp_user,
+            smtp_password=smtp_password,
+            imap_server=imap_server,
+            imap_port=imap_port,
+            imap_folder=imap_folder,
+        )
+    except Exception as e:
+        emit("log", message=f"Advertencia: no se pudo buscar emails Artikos: {e}")
+        artikos_emails = []
+
+    if artikos_emails:
+        from app.services.artikos_scraper import scrape_oc as artikos_scrape
+        emit("log", message=f"Emails Artikos encontrados: {len(artikos_emails)}")
+        existentes_artikos = oc_repository.get_existing_codes()
+        for meta, url in artikos_emails:
+            try:
+                oc, lineas = artikos_scrape(url)
+            except Exception as e:
+                emit("log", message=f"  ERROR scraping Artikos ({meta.get('subject','')}): {e}")
+                continue
+            if oc.codigo_oc in existentes_artikos:
+                emit("log", message=f"  Artikos {oc.codigo_oc} ya existe en BD, omitida")
+                continue
+            try:
+                oc_repository.save_oc(oc, lineas)
+                existentes_artikos.add(oc.codigo_oc)
+                emit("log", message=f"  OK Artikos: OC {oc.codigo_oc} — {oc.nombre_organismo} ({len(lineas)} líneas)")
+            except Exception as e:
+                emit("log", message=f"  ERROR guardando Artikos {oc.codigo_oc}: {e}")
 
     emit("log", message="Buscando OCs privadas en Gmail...")
 
@@ -49,7 +82,7 @@ def run_sync_privado(
             imap_server=imap_server,
             imap_port=imap_port,
             imap_folder=imap_folder,
-            filter_subject=filter_subject,
+            filter_from=filter_from,
         )
     except Exception as e:
         emit("error", message=f"Error conectando a Gmail: {e}")
@@ -263,7 +296,7 @@ def _build_lineas(
             total=raw.get("valor_total", 0.0),
             factor_empaque=1.0,
             cantidad_sap=raw.get("cantidad", 1.0),
-            precio_sap=precio_pdf,
+            precio_sap=round(float(precio_pdf or 0), 2),
             itemcode_sap=itemcode,
             descripcion_sap=desc_sap,
             estado_homologacion=estado_homo,
@@ -337,13 +370,13 @@ def start_sync_privado_thread(
     imap_server: str = "imap.gmail.com",
     imap_port: int = 993,
     imap_folder: str = "INBOX",
-    filter_subject: str = "ORDEN DE COMPRA",
+    filter_from: str = "ordenesdecompra@nemochile.cl",
 ) -> queue.Queue:
     """Inicia el sync privado en thread daemon y retorna la Queue de progreso."""
     q: queue.Queue = queue.Queue()
     t = threading.Thread(
         target=run_sync_privado,
-        args=(smtp_user, smtp_password, imap_server, imap_port, imap_folder, filter_subject, q),
+        args=(smtp_user, smtp_password, imap_server, imap_port, imap_folder, filter_from, q),
         daemon=True,
         name="SyncPrivadoThread",
     )

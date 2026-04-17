@@ -197,13 +197,13 @@ class ConfigFrame(ctk.CTkFrame):
             text_color="gray", font=ctk.CTkFont(size=11)
         ).grid(row=0, column=0, columnspan=4, padx=12, pady=(10, 4), sticky="w")
 
-        ctk.CTkLabel(imap_frame, text="Filtro asunto:", anchor="w").grid(row=1, column=0, padx=12, pady=6, sticky="w")
-        self.entry_imap_filter = ctk.CTkEntry(imap_frame, placeholder_text="ORDEN DE COMPRA")
+        ctk.CTkLabel(imap_frame, text="Filtro remitente:", anchor="w").grid(row=1, column=0, padx=12, pady=6, sticky="w")
+        self.entry_imap_filter = ctk.CTkEntry(imap_frame, placeholder_text="ordenesdecompra@nemochile.cl")
         self.entry_imap_filter.grid(row=1, column=1, columnspan=2, padx=8, pady=6, sticky="ew")
 
         ctk.CTkLabel(
             imap_frame,
-            text="Emails con este texto en el asunto y PDF adjunto serán importados.",
+            text="Emails no leídos enviados por este remitente y con PDF adjunto serán importados.",
             text_color="gray", font=ctk.CTkFont(size=11)
         ).grid(row=2, column=0, columnspan=4, padx=12, pady=(0, 8), sticky="w")
 
@@ -278,7 +278,7 @@ class ConfigFrame(ctk.CTkFrame):
 
         # IMAP filter
         self.entry_imap_filter.delete(0, "end")
-        self.entry_imap_filter.insert(0, cfg.imap_filter_subject or "ORDEN DE COMPRA")
+        self.entry_imap_filter.insert(0, cfg.imap_filter_from or "ordenesdecompra@nemochile.cl")
 
         # Email SMTP
         self.var_smtp_enabled.set(cfg.smtp_enabled)
@@ -430,10 +430,10 @@ class ConfigFrame(ctk.CTkFrame):
 
     def _guardar_imap(self):
         cfg = self.app_state.config
-        cfg.imap_filter_subject = self.entry_imap_filter.get().strip() or "ORDEN DE COMPRA"
+        cfg.imap_filter_from = self.entry_imap_filter.get().strip() or "ordenesdecompra@nemochile.cl"
         from app.config import save_config
         save_config(cfg)
-        messagebox.showinfo("IMAP", "Filtro de asunto guardado correctamente.")
+        messagebox.showinfo("IMAP", "Filtro de remitente guardado correctamente.")
 
     def _on_import_done(self, nombre, count, errores, btn, btn_text):
         btn.configure(state="normal", text=btn_text)
@@ -502,7 +502,7 @@ class ConfigFrame(ctk.CTkFrame):
         cfg.correos_path = self.entry_correos.get().strip()
         cfg.redsalud_homo_path = self.entry_redsalud.get().strip()
         cfg.licitaciones_path = self.entry_licitaciones.get().strip()
-        cfg.imap_filter_subject = self.entry_imap_filter.get().strip() or "ORDEN DE COMPRA"
+        cfg.imap_filter_from = self.entry_imap_filter.get().strip() or "ordenesdecompra@nemochile.cl"
         cfg.theme = self.opt_theme.get()
         from app.config import save_config
         save_config(cfg)

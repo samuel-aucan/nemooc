@@ -5,4 +5,5 @@ sse-starlette>=2.0
 openpyxl>=3.1
 requests>=2.31
 pdfplumber>=0.10
+beautifulsoup4>=4.12
 itsdangerous>=2.2

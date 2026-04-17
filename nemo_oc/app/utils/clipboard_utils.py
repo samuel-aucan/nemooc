@@ -3,10 +3,13 @@ Formatea y copia al portapapeles la tabla SAP lista para pegar en SAP Business O
 Columnas: ItemCode | Descripción | Cantidad | Precio
 Formato: TAB-separado, CRLF entre líneas, sin encabezados.
 """
-import tkinter as tk
 import logging
 from typing import List
 from app.models.linea_oc import LineaOC
+
+# tkinter es opcional: solo se usa en la app desktop, no en el servidor web.
+# El import se hace lazy dentro de copiar_al_portapapeles para evitar
+# ModuleNotFoundError en entornos sin Display (servidor, .exe sin tkinter).
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +51,13 @@ def generar_texto_sap(lineas: List[LineaOC]) -> tuple[str, List[int]]:
     return texto, excluidos
 
 
-def copiar_al_portapapeles(texto: str, root: tk.Tk | None = None) -> bool:
+def copiar_al_portapapeles(texto: str, root=None) -> bool:
     """
-    Copia el texto al portapapeles del sistema.
+    Copia el texto al portapapeles del sistema (solo app desktop).
     Retorna True si tuvo éxito.
     """
     try:
+        import tkinter as tk  # lazy import: no disponible en servidor web
         if root is None:
             # Crear ventana temporal para acceder al portapapeles
             _root = tk.Tk()

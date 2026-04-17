@@ -16,3 +16,9 @@ export const copyText = async (text: string): Promise<boolean> => {
     return ok
   }
 }
+
+export const hasSelectedText = (): boolean => {
+  if (typeof window === 'undefined') return false
+  const text = window.getSelection?.()?.toString() ?? ''
+  return text.trim().length > 0
+}

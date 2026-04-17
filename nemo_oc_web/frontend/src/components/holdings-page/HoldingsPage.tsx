@@ -28,6 +28,7 @@ import {
   updateHoldingRule,
   upsertHoldingRut,
 } from '../../api/holdings'
+import { useConfirmDialog } from '../common/ConfirmDialog'
 
 type MessageState =
   | {
@@ -78,6 +79,7 @@ export default function HoldingsPage() {
 
   const [message, setMessage] = useState<MessageState>(null)
   const [createDraft, setCreateDraft] = useState(EMPTY_HOLDING)
+  const { confirm, Dialog } = useConfirmDialog()
 
   const createMutation = useMutation({
     mutationFn: createHolding,
@@ -215,7 +217,7 @@ export default function HoldingsPage() {
 
       <div className="space-y-5">
         {holdings.map((holding) => (
-          <HoldingCard key={holding.id} holding={holding} onMessage={setMessage} />
+          <HoldingCard key={holding.id} holding={holding} onMessage={setMessage} confirm={confirm} />
         ))}
 
         {holdings.length === 0 && (
@@ -224,6 +226,7 @@ export default function HoldingsPage() {
           </div>
         )}
       </div>
+      <Dialog />
     </div>
   )
 }
@@ -231,9 +234,17 @@ export default function HoldingsPage() {
 function HoldingCard({
   holding,
   onMessage,
+  confirm,
 }: {
   holding: Holding
   onMessage: (message: MessageState) => void
+  confirm: (config: {
+    title: string
+    message: string
+    confirmLabel?: string
+    cancelLabel?: string
+    isDangerous?: boolean
+  }) => Promise<boolean>
 }) {
   const qc = useQueryClient()
   const catalogInputRef = useRef<HTMLInputElement>(null)
@@ -466,13 +477,22 @@ function HoldingCard({
                   </div>
                   <button
                     className="btn-secondary px-3 py-1.5 text-xs"
-                    onClick={() => {
-                      deleteHoldingRut(holding.id, rut.rut_norm)
-                        .then(() => {
-                          onMessage({ kind: 'success', text: `RUT eliminado de ${holding.nombre}.` })
-                          invalidate()
-                        })
-                        .catch((error: Error) => onMessage({ kind: 'error', text: error.message }))
+                    onClick={async () => {
+                      const confirmed = await confirm({
+                        title: 'Eliminar RUT',
+                        message: `¿Estás seguro de que deseas eliminar el RUT ${rut.rut_display || rut.rut_norm} de ${holding.nombre}?`,
+                        confirmLabel: 'Eliminar',
+                        cancelLabel: 'Cancelar',
+                        isDangerous: true,
+                      })
+                      if (confirmed) {
+                        deleteHoldingRut(holding.id, rut.rut_norm)
+                          .then(() => {
+                            onMessage({ kind: 'success', text: `RUT eliminado de ${holding.nombre}.` })
+                            invalidate()
+                          })
+                          .catch((error: Error) => onMessage({ kind: 'error', text: error.message }))
+                      }
                     }}
                   >
                     <Trash2 size={12} />
@@ -590,13 +610,22 @@ function HoldingCard({
                   </div>
                   <button
                     className="btn-secondary px-3 py-1.5 text-xs"
-                    onClick={() => {
-                      deleteHoldingRule(holding.id, rule.id)
-                        .then(() => {
-                          onMessage({ kind: 'success', text: `Dominio eliminado de ${holding.nombre}.` })
-                          invalidate()
-                        })
-                        .catch((error: Error) => onMessage({ kind: 'error', text: error.message }))
+                    onClick={async () => {
+                      const confirmed = await confirm({
+                        title: 'Eliminar dominio',
+                        message: `¿Estás seguro de que deseas eliminar el dominio o pista de correo "${rule.rule_value}" de ${holding.nombre}?`,
+                        confirmLabel: 'Eliminar',
+                        cancelLabel: 'Cancelar',
+                        isDangerous: true,
+                      })
+                      if (confirmed) {
+                        deleteHoldingRule(holding.id, rule.id)
+                          .then(() => {
+                            onMessage({ kind: 'success', text: `Dominio eliminado de ${holding.nombre}.` })
+                            invalidate()
+                          })
+                          .catch((error: Error) => onMessage({ kind: 'error', text: error.message }))
+                      }
                     }}
                   >
                     <Trash2 size={12} />
@@ -682,6 +711,7 @@ function HoldingCard({
                       rule={rule}
                       onMessage={onMessage}
                       onDone={invalidate}
+                      confirm={confirm}
                     />
                   ))}
                 </div>
@@ -762,12 +792,20 @@ function RuleEditor({
   rule,
   onMessage,
   onDone,
+  confirm,
 }: {
   holdingId: string
   holdingNombre: string
   rule: HoldingRule
   onMessage: (message: MessageState) => void
   onDone: () => void
+  confirm: (config: {
+    title: string
+    message: string
+    confirmLabel?: string
+    cancelLabel?: string
+    isDangerous?: boolean
+  }) => Promise<boolean>
 }) {
   const [draft, setDraft] = useState<HoldingRulePayload>({
     rule_type: rule.rule_type,
@@ -830,13 +868,22 @@ function RuleEditor({
         <div className="flex items-center gap-2">
           <button
             className="btn-secondary px-3 py-2 text-xs"
-            onClick={() => {
-              deleteHoldingRule(holdingId, rule.id)
-                .then(() => {
-                  onMessage({ kind: 'success', text: `Regla ${rule.id} eliminada.` })
-                  onDone()
-                })
-                .catch((error: Error) => onMessage({ kind: 'error', text: error.message }))
+            onClick={async () => {
+              const confirmed = await confirm({
+                title: 'Eliminar regla avanzada',
+                message: `¿Estás seguro de que deseas eliminar esta regla de reconocimiento? Esta acción no se puede deshacer.`,
+                confirmLabel: 'Eliminar',
+                cancelLabel: 'Cancelar',
+                isDangerous: true,
+              })
+              if (confirmed) {
+                deleteHoldingRule(holdingId, rule.id)
+                  .then(() => {
+                    onMessage({ kind: 'success', text: `Regla ${rule.id} eliminada.` })
+                    onDone()
+                  })
+                  .catch((error: Error) => onMessage({ kind: 'error', text: error.message }))
+              }
             }}
           >
             <Trash2 size={12} />

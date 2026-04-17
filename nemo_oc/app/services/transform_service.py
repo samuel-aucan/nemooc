@@ -56,6 +56,9 @@ def parse_cabecera_oc(raw: dict) -> OrdenCompra:
         direccion_unidad=comprador.get("DireccionUnidad", ""),
         comuna_unidad=comprador.get("ComunaUnidad", ""),
         region_unidad=comprador.get("RegionUnidad", ""),
+        codigo_licitacion=str(raw.get("CodigoLicitacion", "") or ""),
+        direccion_despacho=comprador.get("DireccionUnidad", ""),
+        direccion_facturacion="",
         codigo_proveedor=proveedor.get("Codigo", ""),
         nombre_proveedor=proveedor.get("Nombre", ""),
         rut_proveedor=proveedor.get("RutSucursal", proveedor.get("Rut", "")),
@@ -130,14 +133,14 @@ def homologar_lineas(
             linea.descripcion_sap = item.descripcion_sap
             linea.factor_empaque = femp
             linea.cantidad_sap = linea.cantidad * femp
-            linea.precio_sap = linea.precio_neto / femp if femp != 0 else linea.precio_neto
+            linea.precio_sap = round(linea.precio_neto / femp if femp != 0 else linea.precio_neto, 2)
             linea.estado_homologacion = "homologado"
         else:
             linea.itemcode_sap = None
             linea.descripcion_sap = None
             linea.factor_empaque = 1.0
             linea.cantidad_sap = linea.cantidad
-            linea.precio_sap = linea.precio_neto
+            linea.precio_sap = round(linea.precio_neto, 2)
             linea.estado_homologacion = "sin_homologacion"
             sin_homo.append(linea.correlativo)
 

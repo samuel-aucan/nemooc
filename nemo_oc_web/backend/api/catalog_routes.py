@@ -9,6 +9,8 @@ from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+from backend.core.constants import validate_mime_type
+
 _nemo_oc_dir = Path(__file__).parent.parent.parent.parent / "nemo_oc"
 if str(_nemo_oc_dir) not in sys.path:
     sys.path.insert(0, str(_nemo_oc_dir))
@@ -35,6 +37,16 @@ router = APIRouter(prefix="/api/catalogs", tags=["catalogs"])
 
 def _save_upload(file: UploadFile, filename: str) -> Path:
     """Guarda el archivo subido en catalogs/ y retorna la ruta."""
+    # Validar MIME type y extensión
+    mime_type = file.content_type or "application/octet-stream"
+    original_filename = file.filename or filename
+    if not validate_mime_type(original_filename, mime_type):
+        raise HTTPException(
+            400,
+            detail=f"Formato de archivo inválido. Solo se aceptan archivos .xlsx. "
+                   f"MIME type: {mime_type}"
+        )
+
     dest = get_catalogs_dir() / filename
     with dest.open("wb") as f:
         shutil.copyfileobj(file.file, f)

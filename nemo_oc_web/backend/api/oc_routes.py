@@ -130,6 +130,7 @@ def list_ocs(
 
 @router.get("/stats", response_model=StatsOut)
 def get_stats():
+    """Conteo rápido: total, sin homologar, ingresadas."""
     return StatsOut(**oc_repository.get_stats())
 
 
@@ -174,10 +175,14 @@ def get_analytics(
         limit=limit,
     )
 
+    # Batch lookup: evitar N+1 queries (antes: 150 lookups, ahora: 1)
+    cliente_codes = [r["cliente_sap_sugerido"] for r in queue_rows if r["cliente_sap_sugerido"]]
+    clientes_map = cartera_svc.lookup_batch(cliente_codes) if cliente_codes else {}
+
     queue: list[ReviewQueueItemOut] = []
 
     for row in queue_rows:
-        cliente = cartera_svc.lookup(row["cliente_sap_sugerido"]) if row["cliente_sap_sugerido"] else None
+        cliente = clientes_map.get(row["cliente_sap_sugerido"]) if row["cliente_sap_sugerido"] else None
         is_pending = (row["estado_homologacion"] or "pendiente") == "pendiente" or not (row["itemcode_sap"] or "").strip()
 
         sugerencia_principal = None

@@ -1,4 +1,5 @@
 import { useRef, useCallback, useState, useEffect, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { storage } from '../../utils/storage'
 
 interface Column {
   id: string
@@ -23,7 +24,7 @@ export default function ResizableTable({ columns, children, storageKey }: Props)
   const [widths, setWidths] = useState<Record<string, number>>(() => {
     if (storageKey) {
       try {
-        const saved = localStorage.getItem(`col-widths-${storageKey}`)
+        const saved = storage.getItem(`col-widths-${storageKey}`)
         if (saved) return JSON.parse(saved)
       } catch { /* ignore */ }
     }
@@ -36,7 +37,7 @@ export default function ResizableTable({ columns, children, storageKey }: Props)
 
   useEffect(() => {
     if (storageKey) {
-      localStorage.setItem(`col-widths-${storageKey}`, JSON.stringify(widths))
+      storage.setItem(`col-widths-${storageKey}`, JSON.stringify(widths))
     }
   }, [widths, storageKey])
 

@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useDebounce } from '../../hooks/useDebounce'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
@@ -6,6 +8,7 @@ import {
   Copy,
   ExternalLink,
   FileDown,
+  RefreshCw,
   Save,
   Settings,
   X,
@@ -18,18 +21,22 @@ import {
   getSugerencias,
   limpiarAsignacion,
   marcarIngresada,
+  rehomologarPrivada,
   updateEstado,
   updateNotas,
 } from '../../api/ocs'
 import { searchMaestra } from '../../api/catalogs'
-import { getConfig } from '../../api/config'
+import { getConfig, updateConfig } from '../../api/config'
 import type { LineaOC } from '../../types/oc'
-import { copyText } from '../../utils/clipboard'
+import { copyText, hasSelectedText } from '../../utils/clipboard'
+import { storage } from '../../utils/storage'
 import { ESTADOS_INTERNOS, estadoInternoBgClass, fmtDate, fmtMoney, fmtNumberCL, homoBadge, homoRowBg } from '../../utils/formatters'
 import ResizableTable from './ResizableTable'
 import SapColumnConfigModal from './SapColumnConfigModal'
+import OcDetailActions from './OcDetailActions'
 
 const IS_CM = (tipo: string) => tipo?.toUpperCase() === 'CM'
+const SAP_VTA_MIGRATION_KEY = 'sap-columns-vta-migrated-v1'
 
 export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onClose: () => void }) {
   const qc = useQueryClient()
@@ -49,6 +56,13 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
 
   const { data: appConfig } = useQuery({ queryKey: ['config'], queryFn: getConfig })
 
+  const migrateSapColumns = useMutation({
+    mutationFn: (columns: string[]) => updateConfig({ sap_columns: columns }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['config'] })
+    },
+  })
+
   const invalidate = () => qc.invalidateQueries({ queryKey: ['oc', codigo] })
 
   const mutEstado = useMutation({
@@ -62,6 +76,20 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
       invalidate()
       qc.invalidateQueries({ queryKey: ['stats'] })
       qc.invalidateQueries({ queryKey: ['ocs'] })
+    },
+  })
+
+  const mutRehomologar = useMutation({
+    mutationFn: () => rehomologarPrivada(codigo),
+    onSuccess: (result) => {
+      invalidate()
+      qc.invalidateQueries({ queryKey: ['stats'] })
+      setCopyMsg(
+        result.actualizadas > 0
+          ? `${result.actualizadas} linea(s) homologadas desde el catalogo.`
+          : 'No se encontraron nuevas homologaciones en el catalogo.'
+      )
+      setTimeout(() => setCopyMsg(''), 4000)
     },
   })
 
@@ -81,6 +109,21 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
       setNotasDirty(false)
     }
   }, [data?.cabecera])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !appConfig?.sap_columns?.length) return
+    if (storage.getItem(SAP_VTA_MIGRATION_KEY)) return
+    if (appConfig.sap_columns.includes('vta')) {
+      storage.setItem(SAP_VTA_MIGRATION_KEY, '1')
+      return
+    }
+
+    const nextColumns = [...appConfig.sap_columns]
+    const itemcodeIdx = nextColumns.indexOf('itemcode')
+    nextColumns.splice(itemcodeIdx >= 0 ? itemcodeIdx + 1 : 0, 0, 'vta')
+    storage.setItem(SAP_VTA_MIGRATION_KEY, '1')
+    migrateSapColumns.mutate(nextColumns)
+  }, [appConfig?.sap_columns, migrateSapColumns])
 
   if (isLoading) {
     return <div className="flex h-full items-center justify-center text-gray-500">Cargando OC...</div>
@@ -110,6 +153,7 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
         return columns
           .map((column) => {
             if (column === 'itemcode') return linea.itemcode_sap || ''
+            if (column === 'vta') return 'VTA'
             if (column === 'descripcion') return linea.descripcion_sap || linea.producto || ''
             if (column === 'cantidad') return linea.cantidad != null ? fmtNumberCL(linea.cantidad, 0) : ''
             if (column === 'cantidad_sap') {
@@ -139,6 +183,16 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
     setTimeout(() => setCopyMsg(''), 2000)
   }
 
+  const handleCopyInline = async (event: ReactMouseEvent, text: string, label: string) => {
+    event.stopPropagation()
+    if (!text) return
+    await handleCopy(text, label)
+  }
+
+  const blockRowToggle = (event: ReactMouseEvent) => {
+    event.stopPropagation()
+  }
+
   return (
     <div className="flex h-full flex-col overflow-hidden bg-gray-950">
       <div className="border-b border-gray-800 bg-gray-900/90 px-4 py-2.5">
@@ -165,7 +219,15 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
               </div>
               <span className="hidden text-gray-700 md:inline">|</span>
               <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <span className="font-mono text-xl font-semibold text-blue-300">{oc.codigo_oc}</span>
+                <span
+                  className="copyable-text font-mono text-xl font-semibold text-blue-300"
+                  title="Doble clic para copiar"
+                  onMouseDown={blockRowToggle}
+                  onClick={blockRowToggle}
+                  onDoubleClick={(event) => handleCopyInline(event, oc.codigo_oc, 'Codigo OC')}
+                >
+                  {oc.codigo_oc}
+                </span>
                 <button
                   className="btn-ghost px-2.5 py-1.5 text-[11px]"
                   onClick={() => handleCopy(oc.codigo_oc, 'Codigo OC')}
@@ -187,41 +249,18 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <button className="btn-primary px-3 py-2 text-xs" onClick={handleCopySap}>
-                <Copy size={14} />
-                Copiar a SAP
-              </button>
-              <button className="btn-secondary px-3 py-2 text-xs" onClick={() => setShowSapConfig(true)}>
-                <Settings size={14} />
-                Ajustes SAP
-              </button>
-              <button className="btn-secondary px-3 py-2 text-xs" onClick={() => exportOc(codigo)}>
-                <FileDown size={14} />
-                Exportar Excel
-              </button>
-              <a
-                href={`https://www.mercadopublico.cl/PurchaseOrder/Modules/PO/DetailsPurchaseOrder.aspx?codigoOC=${oc.codigo_oc}`}
-                target="_blank"
-                rel="noreferrer"
-                className="btn-secondary px-3 py-2 text-xs"
-                aria-label="Abrir OC en Mercado Publico"
-              >
-                <ExternalLink size={14} />
-                Ver portal
-              </a>
-              <button
-                className="btn-success px-3 py-2 text-xs"
-                onClick={() => mutIngresada.mutate()}
-                disabled={oc.estado_interno === 'Ingresada'}
-              >
-                <CheckSquare size={14} />
-                Ingresar en SAP
-              </button>
-              <button className="btn-ghost px-3" onClick={onClose} aria-label="Cerrar panel">
-                <X size={16} />
-              </button>
-            </div>
+            <OcDetailActions
+              oc={oc}
+              esCM={esCM}
+              isRehomologating={mutRehomologar.isPending}
+              isIngresando={mutIngresada.isPending}
+              onRehomologar={() => mutRehomologar.mutate()}
+              onCopySap={handleCopySap}
+              onOpenSapConfig={() => setShowSapConfig(true)}
+              onExport={() => exportOc(codigo)}
+              onIngresar={() => mutIngresada.mutate()}
+              onClose={onClose}
+            />
           </div>
 
           <div className="flex flex-wrap items-end gap-2.5">
@@ -234,10 +273,61 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
             <CompactMeta label="Fecha envio" value={fmtDate(oc.fecha_envio)} className="min-w-[120px]" />
             <CompactMeta label="Cartera" value={oc.cartera || 'Sin cartera'} className="min-w-[110px]" />
             <CompactMeta
-              label="Total"
+              label="Neto"
+              value={fmtMoney(oc.total_neto, oc.moneda)}
+              className="min-w-[130px]"
+            />
+            <CompactMeta
+              label="IVA"
+              value={fmtMoney(oc.impuestos, oc.moneda)}
+              className="min-w-[120px]"
+            />
+            <CompactMeta
+              label="Total bruto"
               value={fmtMoney(oc.total, oc.moneda)}
               secondary={`${lineas.length} linea(s)`}
-              className="min-w-[140px]"
+              className="min-w-[150px]"
+            />
+            {oc.codigo_licitacion && (
+              <div className="min-w-[150px]">
+                <div className="mb-0.5 text-[10px] uppercase tracking-[0.12em] text-gray-500">Licitacion</div>
+                <div className="flex items-center gap-2">
+                  <div
+                    className="copyable-text truncate text-sm font-medium leading-5 text-gray-100"
+                    title="Doble clic para copiar"
+                    onMouseDown={blockRowToggle}
+                    onClick={blockRowToggle}
+                    onDoubleClick={(event) => handleCopyInline(event, oc.codigo_licitacion, 'Licitacion')}
+                  >
+                    {oc.codigo_licitacion}
+                  </div>
+                  <button
+                    className="btn-ghost px-2 py-1 text-[11px]"
+                    onClick={() => handleCopy(oc.codigo_licitacion, 'Licitacion')}
+                    aria-label="Copiar licitacion"
+                  >
+                    <Copy size={12} />
+                    Copiar
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-end gap-2.5">
+            <CopyableMetaWithButton
+              label="Direccion despacho"
+              value={oc.direccion_despacho || oc.direccion_unidad || 'Sin direccion'}
+              copyLabel="Direccion despacho"
+              onCopy={handleCopy}
+              className="min-w-[280px] flex-[1.2]"
+            />
+            <CopyableMetaWithButton
+              label="Direccion facturacion"
+              value={oc.direccion_facturacion || 'Sin direccion'}
+              copyLabel="Direccion facturacion"
+              onCopy={handleCopy}
+              className="min-w-[280px] flex-[1.2]"
             />
 
             <div className="min-w-[170px]">
@@ -301,6 +391,7 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
           storageKey="oc-detail"
           columns={[
             { id: 'corr', label: '#', minWidth: 40, defaultWidth: 44 },
+            { id: 'codmp', label: 'Cod. Cliente', minWidth: 70, defaultWidth: 95 },
             { id: 'desc', label: 'Descripcion OC', minWidth: 130, defaultWidth: 250 },
             { id: 'itemcode', label: 'ItemCode SAP', minWidth: 90, defaultWidth: 150 },
             { id: 'descitem', label: 'Descripcion item', minWidth: 140, defaultWidth: 210 },
@@ -346,6 +437,9 @@ function LineaRow({
   const [manualCode, setManualCode] = useState('')
   const [message, setMessage] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
+  const [dropdownRect, setDropdownRect] = useState<DOMRect | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const debouncedCode = useDebounce(manualCode, 300)
 
   const { data: sugerencias, isLoading: loadingSugerencias } = useQuery({
     queryKey: ['sugs', codigoOc, linea.correlativo],
@@ -355,9 +449,9 @@ function LineaRow({
   })
 
   const { data: searchResults, isLoading: searchLoading } = useQuery({
-    queryKey: ['maestra-search', manualCode],
-    queryFn: () => searchMaestra(manualCode),
-    enabled: selected && showDropdown && manualCode.length >= 3,
+    queryKey: ['maestra-search', debouncedCode],
+    queryFn: () => searchMaestra(debouncedCode),
+    enabled: selected && showDropdown && debouncedCode.length >= 3,
     staleTime: 60_000,
   })
 
@@ -379,23 +473,65 @@ function LineaRow({
 
   const descText = linea.especificacion_comprador || linea.producto || ''
   const badge = homoBadge(linea.estado_homologacion)
+  const copyCell = async (event: ReactMouseEvent, text: string, okMessage: string) => {
+    event.stopPropagation()
+    if (!text) return
+    await copyText(text)
+    setMessage(okMessage)
+    setTimeout(() => setMessage(''), 1800)
+  }
+
+  const blockRowToggle = (event: ReactMouseEvent) => {
+    event.stopPropagation()
+  }
 
   return (
     <>
-      <tr className={`${selected ? 'bg-blue-950/20' : homoRowBg(linea.estado_homologacion)} cursor-pointer`} onClick={onClick}>
+      <tr
+        className={`${selected ? 'bg-blue-950/20' : homoRowBg(linea.estado_homologacion)} cursor-pointer`}
+        onClick={() => {
+          if (hasSelectedText()) return
+          onClick()
+        }}
+      >
         <td className="text-gray-500">{linea.correlativo}</td>
+        <td className="font-mono text-xs text-gray-400">{linea.codigo_mp || '-'}</td>
         <td className="max-w-[220px] whitespace-normal" title={descText}>
-          <span className="text-gray-100">{descText}</span>
+          <span
+            className="copyable-text text-gray-100"
+            title="Doble clic para copiar"
+            onMouseDown={blockRowToggle}
+            onClick={blockRowToggle}
+            onDoubleClick={(event) => copyCell(event, descText, 'Descripcion OC copiada')}
+          >
+            {descText}
+          </span>
         </td>
         <td>
           {linea.itemcode_sap ? (
-            <span className="font-mono text-xs text-blue-300">{linea.itemcode_sap}</span>
+            <span
+              className="copyable-text font-mono text-xs text-blue-300"
+              title="Doble clic para copiar"
+              onMouseDown={blockRowToggle}
+              onClick={blockRowToggle}
+              onDoubleClick={(event) => copyCell(event, linea.itemcode_sap || '', 'ItemCode SAP copiado')}
+            >
+              {linea.itemcode_sap}
+            </span>
           ) : (
-            <span className="font-mono text-xs text-gray-500">Sin itemcode</span>
+            <span className="copyable-text font-mono text-xs text-gray-500">Sin itemcode</span>
           )}
         </td>
         <td className="max-w-[220px] whitespace-normal" title={linea.descripcion_sap || ''}>
-          <span className="text-gray-300">{linea.descripcion_sap || '-'}</span>
+          <span
+            className="copyable-text text-gray-300"
+            title="Doble clic para copiar"
+            onMouseDown={blockRowToggle}
+            onClick={blockRowToggle}
+            onDoubleClick={(event) => copyCell(event, linea.descripcion_sap || '', 'Descripcion SAP copiada')}
+          >
+            {linea.descripcion_sap || '-'}
+          </span>
         </td>
         <td className="text-right">{linea.cantidad}</td>
         <td className="text-right text-gray-400">{linea.cantidad_sap ?? '-'}</td>
@@ -409,7 +545,7 @@ function LineaRow({
 
       {selected && (
         <tr className="bg-gray-900/70">
-          <td colSpan={10} className="px-4 py-3">
+          <td colSpan={11} className="px-4 py-3">
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 {sugerencias && sugerencias.length > 0 && (
@@ -436,20 +572,34 @@ function LineaRow({
               <div className="flex flex-wrap items-start gap-2">
                 <div className="relative min-w-[280px] flex-1">
                   <input
+                    ref={inputRef}
                     className="input"
                     placeholder="Buscar itemcode o descripcion en la maestra..."
                     value={manualCode}
                     onChange={(event) => {
                       setManualCode(event.target.value)
                       setShowDropdown(true)
+                      setDropdownRect(inputRef.current?.getBoundingClientRect() ?? null)
                     }}
-                    onFocus={() => setShowDropdown(true)}
+                    onFocus={() => {
+                      setShowDropdown(true)
+                      setDropdownRect(inputRef.current?.getBoundingClientRect() ?? null)
+                    }}
                     onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
                     onKeyDown={(event) => event.key === 'Enter' && manualCode && assign(manualCode)}
                   />
 
-                  {showDropdown && manualCode.length >= 3 && (
-                    <div className="absolute z-20 mt-2 max-h-52 w-full overflow-y-auto rounded-xl border border-gray-700 bg-gray-950 shadow-2xl">
+                  {showDropdown && manualCode.length >= 3 && dropdownRect && createPortal(
+                    <div
+                      className="max-h-52 overflow-y-auto rounded-xl border border-gray-700 bg-gray-950 shadow-2xl"
+                      style={{
+                        position: 'fixed',
+                        top: dropdownRect.bottom + 4,
+                        left: dropdownRect.left,
+                        width: dropdownRect.width,
+                        zIndex: 9999,
+                      }}
+                    >
                       {searchLoading ? (
                         <div className="px-3 py-2 text-sm text-gray-400">Buscando...</div>
                       ) : searchResults?.length ? (
@@ -468,7 +618,8 @@ function LineaRow({
                       ) : (
                         <div className="px-3 py-2 text-sm text-gray-400">Sin resultados en la maestra.</div>
                       )}
-                    </div>
+                    </div>,
+                    document.body
                   )}
                 </div>
 
@@ -506,10 +657,53 @@ function CompactMeta({
   return (
     <div className={className}>
       <div className="mb-0.5 text-[10px] uppercase tracking-[0.12em] text-gray-500">{label}</div>
-      <div className="truncate text-sm font-medium leading-5 text-gray-100" title={title || value}>
+      <div
+        className="copyable-text truncate text-sm font-medium leading-5 text-gray-100"
+        title={title || value}
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+      >
         {value || '-'}
       </div>
       {secondary && <div className="text-xs text-gray-500">{secondary}</div>}
+    </div>
+  )
+}
+
+function CopyableMetaWithButton({
+  label,
+  value,
+  copyLabel,
+  className = '',
+  onCopy,
+}: {
+  label: string
+  value: string
+  copyLabel: string
+  className?: string
+  onCopy: (text: string, label: string) => Promise<void>
+}) {
+  return (
+    <div className={className}>
+      <div className="mb-0.5 text-[10px] uppercase tracking-[0.12em] text-gray-500">{label}</div>
+      <div className="flex items-center gap-2">
+        <div
+          className="copyable-text truncate text-sm font-medium leading-5 text-gray-100"
+          title={value}
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {value || '-'}
+        </div>
+        <button
+          className="btn-ghost px-2 py-1 text-[11px]"
+          onClick={() => void onCopy(value, copyLabel)}
+          aria-label={`Copiar ${copyLabel}`}
+        >
+          <Copy size={12} />
+          Copiar
+        </button>
+      </div>
     </div>
   )
 }

@@ -195,6 +195,95 @@ def run_sync(
     emit("done", message=resumen, nuevas=nuevas, errores=errores)
 
 
+def run_sync_light(
+    ticket: str,
+    codigo_empresa: str,
+    fecha_desde: datetime,
+    fecha_hasta: datetime,
+    progress_queue: queue.Queue,
+) -> None:
+    """
+    Sincronización ligera: solo actualiza estado_mp de OCs existentes.
+    NO descarga líneas completas, solo estado.
+    Corre en thread separado.
+    """
+    def emit(tipo: str, **kwargs):
+        progress_queue.put({"type": tipo, **kwargs})
+
+    emit("log", message="Iniciando sincronización ligera de estados (Mercado Público)...")
+
+    api = MercadoPublicoAPI(ticket=ticket, codigo_empresa=codigo_empresa)
+
+    # Obtener lista simple de OCs
+    try:
+        lista_raw = api.obtener_lista_oc(fecha_desde, fecha_hasta, solo_cm=False)
+    except Exception as e:
+        emit("error", message=f"Error obteniendo lista: {e}")
+        return
+
+    total = len(lista_raw)
+    emit("log", message=f"Se encontraron {total} OC(s) en el período.")
+    emit("progress", current=0, total=total)
+
+    if total == 0:
+        emit("done", message="No hay OCs en el rango seleccionado.", nuevas=0, errores=0)
+        return
+
+    # Obtener códigos existentes
+    try:
+        existentes = oc_repository.get_existing_codes()
+    except Exception as e:
+        emit("error", message=f"Error accediendo BD: {e}")
+        return
+
+    actualizadas = 0
+    errores = 0
+
+    # Actualizar solo estado_mp de OCs existentes
+    for idx, raw in enumerate(lista_raw, 1):
+        codigo = raw.get("Codigo", "")
+        if not codigo:
+            continue
+
+        if codigo not in existentes:
+            emit("log", message=f"  [{idx}/{total}] {codigo} — omitida (no existe en BD)")
+            emit("progress", current=idx, total=total)
+            continue
+
+        try:
+            # En la lista el campo de estado se llama "Nombre" (no "Estado")
+            estado_mp = raw.get("Nombre", "") or raw.get("Estado", "")
+            codigo_estado_mp = raw.get("CodigoEstado", 0)
+
+            # Actualizar en BD (pequeña operación)
+            from app.db import get_connection
+            conn = get_connection()
+            try:
+                conn.execute(
+                    """
+                    UPDATE oc_cabecera
+                    SET estado_mp = ?, codigo_estado_mp = ?, fecha_ultima_modificacion = ?
+                    WHERE codigo_oc = ?
+                    """,
+                    (estado_mp, codigo_estado_mp, datetime.now().isoformat(), codigo),
+                )
+                conn.commit()
+                actualizadas += 1
+                emit("log", message=f"  [{idx}/{total}] {codigo} → {estado_mp} ✓")
+            finally:
+                conn.close()
+
+        except Exception as e:
+            emit("log", message=f"  [{idx}/{total}] {codigo} — ERROR: {e}")
+            errores += 1
+
+        emit("progress", current=idx, total=total)
+
+    resumen = f"Sincronización ligera completada. Actualizadas: {actualizadas} | Errores: {errores}"
+    emit("log", message=resumen)
+    emit("done", message=resumen, nuevas=actualizadas, errores=errores)
+
+
 def start_sync_thread(
     ticket: str,
     codigo_empresa: str,
@@ -211,6 +300,26 @@ def start_sync_thread(
         args=(ticket, codigo_empresa, fecha_desde, fecha_hasta, q, solo_cm),
         daemon=True,
         name="SyncThread",
+    )
+    t.start()
+    return q
+
+
+def start_sync_light_thread(
+    ticket: str,
+    codigo_empresa: str,
+    fecha_desde: datetime,
+    fecha_hasta: datetime,
+) -> queue.Queue:
+    """
+    Inicia sincronización ligera en thread daemon.
+    """
+    q: queue.Queue = queue.Queue()
+    t = threading.Thread(
+        target=run_sync_light,
+        args=(ticket, codigo_empresa, fecha_desde, fecha_hasta, q),
+        daemon=True,
+        name="SyncLightThread",
     )
     t.start()
     return q

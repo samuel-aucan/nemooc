@@ -1,3 +1,5 @@
+import os
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.core.auth import (
@@ -6,8 +8,10 @@ from backend.core.auth import (
     create_user,
     get_current_user,
     get_user_by_username,
+    is_auth_disabled,
     initiate_access_reset,
     list_users,
+    _local_user,
     login_session,
     logout_session,
     require_admin,
@@ -15,6 +19,9 @@ from backend.core.auth import (
     update_user,
     verify_password,
 )
+
+# Rate limiting: {username -> [timestamp, timestamp, ...]}
+_login_attempts: dict[str, list[datetime]] = {}
 from .schemas import (
     AuthBootstrapIn,
     AuthBootstrapStatusOut,
@@ -29,42 +36,99 @@ from .schemas import (
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+MAX_LOGIN_ATTEMPTS = int(os.getenv("NEMOOC_LOGIN_MAX_ATTEMPTS", "5"))
+LOGIN_BLOCK_MINUTES = int(os.getenv("NEMOOC_LOGIN_BLOCK_MINUTES", "15"))
+
+def _check_rate_limit(username: str) -> None:
+    now = datetime.utcnow()
+    if username not in _login_attempts:
+        _login_attempts[username] = []
+
+    attempts = _login_attempts[username]
+    # Limpiar intentos más viejos que el bloqueo
+    cutoff = now - timedelta(minutes=LOGIN_BLOCK_MINUTES)
+    attempts[:] = [t for t in attempts if t > cutoff]
+
+    if len(attempts) >= MAX_LOGIN_ATTEMPTS:
+        oldest = attempts[0]
+        unblock_time = oldest + timedelta(minutes=LOGIN_BLOCK_MINUTES)
+        if now < unblock_time:
+            wait_seconds = int((unblock_time - now).total_seconds())
+            raise HTTPException(
+                429,
+                detail=f"Demasiados intentos fallidos. Intenta de nuevo en {wait_seconds} segundos.",
+                headers={"Retry-After": str(wait_seconds)},
+            )
+
+def _record_failed_attempt(username: str) -> None:
+    if username not in _login_attempts:
+        _login_attempts[username] = []
+    _login_attempts[username].append(datetime.utcnow())
+
 
 @router.get("/bootstrap-status", response_model=AuthBootstrapStatusOut)
 def bootstrap_status():
-    return AuthBootstrapStatusOut(requires_setup=count_users() == 0)
+    if is_auth_disabled():
+        return AuthBootstrapStatusOut(requires_setup=False, auth_disabled=True)
+    return AuthBootstrapStatusOut(requires_setup=count_users() == 0, auth_disabled=False)
 
 
 @router.post("/bootstrap", response_model=AuthUserOut)
 def bootstrap(body: AuthBootstrapIn, request: Request):
+    if is_auth_disabled():
+        return AuthUserOut(**_local_user())
     if count_users() > 0:
         raise HTTPException(409, detail="La aplicación ya tiene usuarios creados.")
+
+    _check_rate_limit(body.username)
+
     if body.password != body.password_confirm:
+        _record_failed_attempt(body.username)
         raise HTTPException(400, detail="Las contraseñas no coinciden.")
 
     user = create_user(body.username, body.password, body.nombre_completo, "admin")
+    _login_attempts.pop(body.username, None)
     session_user = login_session(request, user)
     return AuthUserOut(**session_user)
 
 
 @router.post("/login", response_model=AuthUserOut)
 def login(body: AuthLoginIn, request: Request):
+    if is_auth_disabled():
+        return AuthUserOut(**_local_user())
     if count_users() == 0:
         raise HTTPException(400, detail="Primero debes crear el usuario administrador inicial.")
 
+    _check_rate_limit(body.username)
+
     user = get_user_by_username(body.username)
     if not user or not verify_password(body.password, user["password_hash"]):
+        _record_failed_attempt(body.username)
         raise HTTPException(401, detail="Usuario o contraseña incorrectos.")
 
+    _login_attempts.pop(body.username, None)
     session_user = login_session(request, user)
     return AuthUserOut(**session_user)
 
 
 @router.post("/complete-reset", response_model=AuthUserOut)
 def complete_reset(body: AuthCompleteResetIn, request: Request):
+    if is_auth_disabled():
+        return AuthUserOut(**_local_user())
+
+    _check_rate_limit(body.username)
+
     if body.password != body.password_confirm:
+        _record_failed_attempt(body.username)
         raise HTTPException(400, detail="Las contraseñas no coinciden.")
-    user = complete_access_reset(body.username, body.token, body.password)
+
+    try:
+        user = complete_access_reset(body.username, body.token, body.password)
+        _login_attempts.pop(body.username, None)
+    except HTTPException:
+        _record_failed_attempt(body.username)
+        raise
+
     session_user = login_session(request, user)
     return AuthUserOut(**session_user)
 

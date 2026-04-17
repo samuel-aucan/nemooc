@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { format, subDays } from 'date-fns'
-import { Mail, Play, ShieldCheck, Wifi } from 'lucide-react'
+import { Mail, Play, RefreshCw, ShieldCheck, Wifi } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 
-import { getGlobalLogs, startSyncGmail, startSyncMp, testApi } from '../../api/sync'
+import { getGlobalLogs, startSyncGmail, startSyncMp, startSyncMpLight, testApi } from '../../api/sync'
 import { useSyncSSE } from '../../hooks/useSyncSSE'
 
 const today = () => format(new Date(), 'yyyy-MM-dd')
@@ -20,7 +20,9 @@ export default function ImportPage() {
   const [cm, setCm] = useState(true)
   const [otras, setOtras] = useState(true)
   const [syncId, setSyncId] = useState<string | null>(null)
-  const [syncPath, setSyncPath] = useState<'mercado-publico' | 'gmail'>('mercado-publico')
+  const [syncPath, setSyncPath] = useState<'mercado-publico' | 'gmail' | 'mp-estados-ligero'>('mercado-publico')
+  const [lightFechaDesde, setLightFechaDesde] = useState(ago(365))
+  const [lightFechaHasta, setLightFechaHasta] = useState(today())
   const [testState, setTestState] = useState<TestState>(null)
   const [formError, setFormError] = useState('')
 
@@ -52,6 +54,14 @@ export default function ImportPage() {
     reset()
     setSyncPath('mercado-publico')
     const id = await startSyncMp(fechaDesde, fechaHasta, cm && !otras)
+    setSyncId(id)
+  }
+
+  const startLightSync = async () => {
+    setFormError('')
+    reset()
+    setSyncPath('mp-estados-ligero')
+    const id = await startSyncMpLight(lightFechaDesde, lightFechaHasta)
     setSyncId(id)
   }
 
@@ -177,6 +187,44 @@ export default function ImportPage() {
                 {testState.message}
               </div>
             )}
+          </div>
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="card-header">
+          <RefreshCw size={15} className="text-accent" />
+          Actualizar estados (sin re-descargar)
+        </div>
+        <div className="card-body space-y-4">
+          <div className="section-note">
+            Consulta el portal y actualiza solo el <strong className="text-gray-300">estado_mp</strong> de
+            las OCs ya descargadas. Mucho mas rapido que una descarga completa. Util para regularizar OCs
+            con estado vacio o desfasado sin volver a bajar todas las lineas.
+          </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr_1.2fr_auto]">
+            <div>
+              <label className="label">Fecha desde</label>
+              <input type="date" className="input" value={lightFechaDesde} onChange={(e) => setLightFechaDesde(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Fecha hasta</label>
+              <input type="date" className="input" value={lightFechaHasta} onChange={(e) => setLightFechaHasta(e.target.value)} />
+            </div>
+            <div className="flex flex-wrap items-end gap-2">
+              {([['30 dias', 30], ['90 dias', 90], ['365 dias', 365]] as [string, number][]).map(([label, days]) => (
+                <button key={label} className="btn-ghost px-3 py-2 text-xs"
+                  onClick={() => { setLightFechaDesde(ago(days)); setLightFechaHasta(today()) }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <button className="btn-secondary" onClick={startLightSync} disabled={running}>
+              <RefreshCw size={14} className={running && syncPath === 'mp-estados-ligero' ? 'animate-spin' : ''} />
+              {running && syncPath === 'mp-estados-ligero' ? 'Actualizando estados...' : 'Actualizar estados MP'}
+            </button>
           </div>
         </div>
       </section>

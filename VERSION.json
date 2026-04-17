@@ -1,0 +1,17 @@
+{
+  "app": "NemoOC",
+  "current_version": "v1.2.0",
+  "title": "Mejoras bandeja web: holdings, precio SAP y filtros",
+  "description_slug": "mejoras-web-holdings",
+  "date": "2026-04-16",
+  "time": "12:18",
+  "timestamp": "2026-04-16T12:18:00-04:00",
+  "checkpoint_dir": "RESPALDOS/2026-04-16_v1.2.0_mejoras-web-holdings",
+  "checkpoint_file": "RESPALDOS/2026-04-16_v1.2.0_mejoras-web-holdings/CHECKPOINT_v1.2.0.md",
+  "manifest_file": "RESPALDOS/2026-04-16_v1.2.0_mejoras-web-holdings/manifest.json",
+  "database_included": true,
+  "git": {
+    "branch": "main",
+    "head": "2e22689511f35ba043168bbe656dfa386eba8c50"
+  }
+}

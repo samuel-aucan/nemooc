@@ -53,6 +53,7 @@ export default function UsersPage() {
   })
 
   const isAdmin = authQuery.data?.rol === 'admin'
+  const authDisabled = authQuery.data?.auth_disabled ?? false
   const users = usersQuery.data ?? []
 
   const submit = (event: FormEvent) => {
@@ -81,6 +82,24 @@ export default function UsersPage() {
               <div className="font-medium text-gray-100">Acceso restringido</div>
               <div className="mt-1 text-gray-400">
                 Solo un usuario administrador puede crear o gestionar cuentas.
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    )
+  }
+
+  if (authDisabled) {
+    return (
+      <div className="page-shell">
+        <section className="card">
+          <div className="card-body flex items-start gap-3 text-sm text-gray-300">
+            <ShieldAlert size={18} className="mt-0.5 text-accent" />
+            <div>
+              <div className="font-medium text-gray-100">Modo local sin contraseñas</div>
+              <div className="mt-1 text-gray-400">
+                La gestion de usuarios esta deshabilitada porque esta instalacion entra directo y no pide login.
               </div>
             </div>
           </div>

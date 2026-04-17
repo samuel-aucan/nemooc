@@ -100,6 +100,16 @@ class CarteraService:
             self._reload_cache()
         return self._cache.get(str(cod_cliente).strip()) if cod_cliente else None
 
+    def lookup_batch(self, cod_clientes: list[str]) -> dict[str, Optional[CarteraCliente]]:
+        """Búsqueda batch: evita N+1 queries. Retorna dict {cod_cliente -> CarteraCliente|None}."""
+        if not self._loaded:
+            self._reload_cache()
+        return {
+            str(cod).strip(): self._cache.get(str(cod).strip())
+            for cod in cod_clientes
+            if cod
+        }
+
     def get_count(self) -> int:
         if not self._loaded:
             self._reload_cache()

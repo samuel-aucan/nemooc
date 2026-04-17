@@ -11,6 +11,51 @@ from typing import List, Optional
 from app.db import get_connection
 
 
+def upsert_from_assignment(
+    descripcion_comprador: str,
+    itemcode_sap: str,
+    rut_comprador: str,
+    descripcion_nemo: str = "",
+) -> None:
+    """
+    Registra una asignación manual/sugerida como referencia futura.
+    Si ya existe (descripcion_norm, rut_comprador, itemcode_sap) incrementa frecuencia.
+    Si no existe, inserta con frecuencia=1.
+    """
+    from app.services.licitaciones_service import _normalize  # type: ignore
+
+    if not descripcion_comprador or not itemcode_sap:
+        return
+
+    desc_norm = _normalize(descripcion_comprador)
+    if not desc_norm:
+        return
+
+    conn = get_connection()
+    try:
+        existing = conn.execute("""
+            SELECT id FROM licitaciones_ref
+            WHERE descripcion_norm = ? AND rut_comprador = ? AND itemcode_sap = ?
+        """, (desc_norm, rut_comprador or "", itemcode_sap)).fetchone()
+
+        if existing:
+            conn.execute("""
+                UPDATE licitaciones_ref SET frecuencia = frecuencia + 1
+                WHERE id = ?
+            """, (existing["id"],))
+        else:
+            conn.execute("""
+                INSERT INTO licitaciones_ref
+                    (descripcion_comprador, descripcion_nemo, descripcion_norm,
+                     itemcode_sap, rut_comprador, frecuencia)
+                VALUES (?, ?, ?, ?, ?, 1)
+            """, (descripcion_comprador, descripcion_nemo or descripcion_comprador,
+                  desc_norm, itemcode_sap, rut_comprador or ""))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def count_licitaciones() -> int:
     conn = get_connection()
     try:

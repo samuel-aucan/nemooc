@@ -20,20 +20,43 @@ from .schemas import ConfigOut, ConfigIn
 router = APIRouter(prefix="/api/config", tags=["config"])
 
 
+def _prepare_config_out(cfg_dict: dict) -> ConfigOut:
+    """Transforma config interna a ConfigOut enmascarando credenciales."""
+    from backend.core.secrets import mask_api_ticket
+
+    # Enmascarar credenciales sensibles
+    api_ticket = cfg_dict.pop("api_ticket", "")
+    cfg_dict["api_ticket_last_chars"] = mask_api_ticket(api_ticket)
+
+    # Indicar si contraseñas están configuradas sin devolverlas
+    cfg_dict["smtp_password_configured"] = bool(cfg_dict.pop("smtp_password", ""))
+    cfg_dict["imap_filter_from_configured"] = bool(cfg_dict.pop("imap_filter_from", ""))
+
+    return ConfigOut(**cfg_dict)
+
 @router.get("", response_model=ConfigOut)
 def get_config():
     cfg = load_config()
-    return ConfigOut(**asdict(cfg))
+    cfg_dict = asdict(cfg)
+    return _prepare_config_out(cfg_dict)
 
 
 @router.put("", response_model=ConfigOut)
 def update_config(body: ConfigIn):
     cfg = load_config()
+
+    # No permitir actualizar campos sensibles a través de la API (deben editarse en UI con validación)
     for field, val in body.model_dump(exclude_none=True).items():
+        if field in ("smtp_password", "imap_filter_from"):
+            # Permitir que se actualicen, pero solamente si vienen desde el cliente
+            # En el frontend, estos campos nunca se deben mostrar en forma plana
+            pass
         if hasattr(cfg, field):
             setattr(cfg, field, val)
+
     save_config(cfg)
-    return ConfigOut(**asdict(cfg))
+    cfg_dict = asdict(cfg)
+    return _prepare_config_out(cfg_dict)
 
 
 @router.get("/manual")

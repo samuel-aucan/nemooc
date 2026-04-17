@@ -10,6 +10,7 @@ interface Props {
 
 export const COLUMNS_AVAILABLE = [
   { id: 'itemcode', name: 'ItemCode SAP' },
+  { id: 'vta', name: 'Area negocio (VTA)' },
   { id: 'descripcion', name: 'Descripcion SAP' },
   { id: 'cantidad', name: 'Cantidad OC' },
   { id: 'cantidad_sap', name: 'Cantidad SAP' },
@@ -35,7 +36,7 @@ export default function SapColumnConfigModal({ onClose }: Props) {
     }
 
     if (cfg) {
-      setColumns(['itemcode', 'descripcion', 'cantidad', 'precio'])
+      setColumns(['itemcode', 'vta', 'cantidad_sap', 'precio_sap'])
     }
   }, [cfg])
 

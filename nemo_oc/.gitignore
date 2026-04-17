@@ -29,4 +29,8 @@ Thumbs.db
 # PyInstaller output
 build/
 dist/
+build_qt/
+dist_qt/
+release_qt/
+*.zip
 desktop.ini

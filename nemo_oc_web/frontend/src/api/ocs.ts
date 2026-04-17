@@ -6,6 +6,7 @@ import type {
   Filtros,
   Sugerencia,
   AnalyticsResponse,
+  AuditoriaResponse,
 } from '../types/oc'
 
 export interface OcFilters {
@@ -13,6 +14,7 @@ export interface OcFilters {
   estado_mp?: string[]
   tipo_oc?: string[]
   cartera?: string[]
+  holding?: string[]
   fecha_desde?: string
   fecha_hasta?: string
   busqueda?: string
@@ -79,3 +81,9 @@ export const exportAll = (filters: OcFilters = {}) => {
 
 export const exportOc = (codigo: string) =>
   window.open(`/api/ocs/${codigo}/export-excel`, '_blank')
+
+export const rehomologarPrivada = (codigo: string) =>
+  api.post<{ actualizadas: number }>(`/ocs/${codigo}/rehomologar-privada`).then(r => r.data)
+
+export const getAuditoria = (params: { fecha_desde?: string; fecha_hasta?: string } = {}) =>
+  api.get<AuditoriaResponse>('/ocs/auditoria', { params }).then(r => r.data)

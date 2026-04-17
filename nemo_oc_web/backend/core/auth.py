@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from fastapi import HTTPException, Request
 
-from app.config import get_data_dir
+from app.config import get_data_dir, load_config
 from app.db import get_connection
 
 SESSION_COOKIE_NAME = "nemooc_session"
@@ -17,11 +17,45 @@ PBKDF2_ITERATIONS = 210_000
 RESET_TOKEN_HOURS = 24
 
 
+def is_auth_disabled() -> bool:
+    env_value = os.getenv("NEMOOC_DISABLE_AUTH", "").strip().lower()
+    if env_value in {"1", "true", "yes", "on"}:
+        return True
+    if env_value in {"0", "false", "no", "off"}:
+        return False
+
+    try:
+        return not load_config().auth_enabled
+    except Exception:
+        return True
+
+
+def _local_user() -> dict[str, Any]:
+    return {
+        "id": 0,
+        "username": "local",
+        "nombre_completo": "Uso local",
+        "rol": "admin",
+        "activo": True,
+        "last_login_at": "",
+        "must_reset_password": False,
+        "auth_disabled": True,
+    }
+
+
 def get_session_secret() -> str:
     env_secret = os.getenv("NEMOOC_SESSION_SECRET", "").strip()
     if env_secret:
         return env_secret
 
+    # En producción, session_secret DEBE venir de .env
+    if os.getenv("NEMOOC_ENV", "").strip().lower() == "production":
+        raise RuntimeError(
+            "CRÍTICO: NEMOOC_SESSION_SECRET no está configurado en .env. "
+            "En producción, debe establecerse una clave aleatoria segura."
+        )
+
+    # En desarrollo, generar y cachear en disco
     secret_path = get_data_dir() / "session_secret.txt"
     if secret_path.exists():
         return secret_path.read_text(encoding="utf-8").strip()
@@ -165,10 +199,13 @@ def serialize_user(user: dict[str, Any]) -> dict[str, Any]:
         "activo": bool(user.get("activo", 1)),
         "last_login_at": user.get("last_login_at") or "",
         "must_reset_password": bool(user.get("must_reset_password", 0)),
+        "auth_disabled": False,
     }
 
 
 def login_session(request: Request, user: dict[str, Any]) -> dict[str, Any]:
+    if is_auth_disabled():
+        return _local_user()
     if not user.get("activo", 1):
         raise HTTPException(403, detail="Este usuario está desactivado.")
     if user.get("must_reset_password", 0):
@@ -189,10 +226,14 @@ def login_session(request: Request, user: dict[str, Any]) -> dict[str, Any]:
 
 
 def logout_session(request: Request) -> None:
+    if is_auth_disabled():
+        return
     request.session.clear()
 
 
 def get_current_user(request: Request) -> dict[str, Any]:
+    if is_auth_disabled():
+        return _local_user()
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(401, detail="No autenticado.")
@@ -206,10 +247,14 @@ def get_current_user(request: Request) -> dict[str, Any]:
 
 
 def require_auth(request: Request) -> dict[str, Any]:
+    if is_auth_disabled():
+        return _local_user()
     return get_current_user(request)
 
 
 def require_admin(request: Request) -> dict[str, Any]:
+    if is_auth_disabled():
+        return _local_user()
     user = get_current_user(request)
     if user.get("rol") != "admin":
         raise HTTPException(403, detail="Solo un administrador puede realizar esta acción.")

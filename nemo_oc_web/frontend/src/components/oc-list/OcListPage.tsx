@@ -1,18 +1,27 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { format } from 'date-fns'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Download,
   FilterX,
   RefreshCw,
   Search,
+  Settings2,
 } from 'lucide-react'
 
+import { getConfig } from '../../api/config'
 import { exportAll, getFiltros, getOcs, type OcFilters } from '../../api/ocs'
+import { storage } from '../../utils/storage'
 import { ESTADOS_INTERNOS, estadoInternoBgClass, fmtDate, fmtMoney } from '../../utils/formatters'
 import type { OrdenCompra } from '../../types/oc'
+import { copyText, hasSelectedText } from '../../utils/clipboard'
 import MultiSelect from '../common/MultiSelect'
 import OcDetailPanel from '../oc-detail/OcDetailPanel'
+import OcListColumnConfigModal, {
+  DEFAULT_OC_LIST_COLUMNS,
+  OC_LIST_COLUMNS_AVAILABLE,
+  type OcListColumnId,
+} from './OcListColumnConfigModal'
 
 const TIPO_CM = ['CM']
 const TOP_SECTION_STORAGE_KEY = 'oc-list-top-section-height'
@@ -31,18 +40,20 @@ function clamp(value: number, min: number, max: number) {
 }
 
 export default function OcListPage() {
+  const qc = useQueryClient()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const resizeRef = useRef<{ startY: number; startHeight: number } | null>(null)
   const [filters, setFilters] = useState<OcFilters>({})
   const [draft, setDraft] = useState<OcFilters>({})
   const [selectedCodigo, setSelectedCodigo] = useState<string | null>(null)
   const [soloHoy, setSoloHoy] = useState(false)
+  const [showColumnConfig, setShowColumnConfig] = useState(false)
   const [topSectionHeight, setTopSectionHeight] = useState(() => {
     if (typeof window === 'undefined') {
       return DEFAULT_TOP_SECTION_HEIGHT
     }
 
-    const saved = Number(window.localStorage.getItem(TOP_SECTION_STORAGE_KEY))
+    const saved = Number(storage.getItem(TOP_SECTION_STORAGE_KEY))
     return Number.isFinite(saved) && saved > 0 ? saved : DEFAULT_TOP_SECTION_HEIGHT
   })
 
@@ -56,6 +67,11 @@ export default function OcListPage() {
     queryFn: getFiltros,
   })
 
+  const { data: appConfig } = useQuery({
+    queryKey: ['config'],
+    queryFn: getConfig,
+  })
+
   useEffect(() => {
     if (selectedCodigo && !ocs.some((oc) => oc.codigo_oc === selectedCodigo)) {
       setSelectedCodigo(null)
@@ -63,8 +79,12 @@ export default function OcListPage() {
   }, [ocs, selectedCodigo])
 
   useEffect(() => {
-    window.localStorage.setItem(TOP_SECTION_STORAGE_KEY, String(topSectionHeight))
+    storage.setItem(TOP_SECTION_STORAGE_KEY, String(topSectionHeight))
   }, [topSectionHeight])
+
+  const activeColumns = (appConfig?.oc_list_columns?.length ? appConfig.oc_list_columns : DEFAULT_OC_LIST_COLUMNS)
+    .map((id) => OC_LIST_COLUMNS_AVAILABLE.find((column) => column.id === id))
+    .filter(Boolean) as Array<{ id: OcListColumnId; name: string }>
 
   const apply = () => setFilters({ ...draft })
 
@@ -197,6 +217,26 @@ export default function OcListPage() {
                 />
               </div>
 
+              {(filtros?.holdings?.length ?? 0) > 0 && (
+                <div className="min-w-[150px] flex-1">
+                  <label className="label">Holding</label>
+                  <MultiSelect
+                    options={(filtros?.holdings ?? []).map((h) => h.nombre)}
+                    value={(draft.holding ?? []).map(
+                      (id) => filtros?.holdings.find((h) => h.id === id)?.nombre ?? id
+                    )}
+                    onChange={(names) =>
+                      setMulti(
+                        'holding',
+                        names.map(
+                          (n) => filtros?.holdings.find((h) => h.nombre === n)?.id ?? n
+                        )
+                      )
+                    }
+                  />
+                </div>
+              )}
+
               <label className="flex h-[42px] items-center gap-2 rounded-xl border border-gray-800 bg-gray-950/60 px-3 py-2 text-sm text-gray-300">
                 <input
                   type="checkbox"
@@ -251,13 +291,17 @@ export default function OcListPage() {
                     {ocs.length} resultado(s){selectedCodigo ? ' | detalle abierto' : ' | selecciona una fila para ver detalle'}
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-1.5 text-[11px] text-gray-500">
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
                   <span className="rounded-full border border-gray-800 bg-gray-950/70 px-2.5 py-0.5">
                     Navegacion rapida
                   </span>
                   <span className="rounded-full border border-gray-800 bg-gray-950/70 px-2.5 py-0.5">
                     Detalle siempre visible
                   </span>
+                  <button className="btn-ghost px-2.5 py-1 text-[11px]" onClick={() => setShowColumnConfig(true)}>
+                    <Settings2 size={13} />
+                    Columnas
+                  </button>
                 </div>
               </div>
             </div>
@@ -269,22 +313,20 @@ export default function OcListPage() {
                 <table className="tbl">
                   <thead>
                     <tr>
-                      <th>Codigo OC</th>
-                      <th>Tipo</th>
-                      <th>Estado MP</th>
-                      <th>Estado</th>
-                      <th>Fecha</th>
-                      <th>Comprador</th>
-                      <th>Cliente SAP</th>
-                      <th>Cartera</th>
-                      <th className="text-right">Total</th>
-                      <th className="text-center">Lineas</th>
+                      {activeColumns.map((column) => (
+                        <th
+                          key={column.id}
+                          className={column.id === 'total' ? 'text-right' : column.id === 'cantidad_lineas' ? 'text-center' : ''}
+                        >
+                          {column.name}
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
                     {ocs.length === 0 && (
                       <tr>
-                        <td colSpan={10} className="px-6 py-14 text-center">
+                        <td colSpan={activeColumns.length || 1} className="px-6 py-14 text-center">
                           <div className="space-y-2">
                             <div className="text-sm font-medium text-gray-200">No hay OCs para la combinacion actual.</div>
                             <div className="text-sm text-gray-500">
@@ -298,6 +340,7 @@ export default function OcListPage() {
                       <OcRow
                         key={oc.codigo_oc}
                         oc={oc}
+                        columns={activeColumns}
                         selected={oc.codigo_oc === selectedCodigo}
                         onToggle={() => setSelectedCodigo((current) => (current === oc.codigo_oc ? null : oc.codigo_oc))}
                       />
@@ -339,16 +382,20 @@ export default function OcListPage() {
           )}
         </div>
       </div>
+
+      {showColumnConfig && <OcListColumnConfigModal onClose={() => setShowColumnConfig(false)} />}
     </div>
   )
 }
 
 function OcRow({
   oc,
+  columns,
   selected,
   onToggle,
 }: {
   oc: OrdenCompra
+  columns: Array<{ id: OcListColumnId; name: string }>
   selected: boolean
   onToggle: () => void
 }) {
@@ -357,7 +404,10 @@ function OcRow({
       className={`cursor-pointer transition-colors ${
         selected ? 'bg-blue-950/20' : 'hover:bg-gray-900/70'
       }`}
-      onClick={onToggle}
+      onClick={() => {
+        if (hasSelectedText()) return
+        onToggle()
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
@@ -367,32 +417,107 @@ function OcRow({
       tabIndex={0}
       aria-selected={selected}
     >
-      <td className="font-mono text-left text-blue-300">{oc.codigo_oc}</td>
-      <td>
-        <span
-          className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
-            isCm(oc.tipo_oc) ? 'bg-violet-500/15 text-violet-300' : 'bg-gray-800 text-gray-300'
-          }`}
+      {columns.map((column) => (
+        <td
+          key={column.id}
+          className={
+            column.id === 'total'
+              ? 'text-right'
+              : column.id === 'cantidad_lineas'
+                ? 'text-center text-gray-400'
+                : undefined
+          }
         >
-          {oc.tipo_oc}
-        </span>
-      </td>
-      <td className="text-gray-400">{oc.estado_mp}</td>
-      <td>
-        <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-medium ${estadoInternoBgClass(oc.estado_interno)}`}>
-          {oc.estado_interno}
-        </span>
-      </td>
-      <td className="text-gray-400">{fmtDate(oc.fecha_envio)}</td>
-      <td className="max-w-[280px] whitespace-normal">
-        <div className="text-gray-100" title={oc.nombre_organismo}>
-          {oc.nombre_organismo}
-        </div>
-      </td>
-      <td className="font-mono text-xs text-gray-200">{oc.cliente_sap_sugerido || '-'}</td>
-      <td className="text-gray-400">{oc.cartera || '-'}</td>
-      <td className="text-right">{fmtMoney(oc.total, oc.moneda)}</td>
-      <td className="text-center text-gray-400">{oc.cantidad_lineas}</td>
+          {renderOcCell(oc, column.id)}
+        </td>
+      ))}
     </tr>
   )
+}
+
+function renderOcCell(oc: OrdenCompra, columnId: OcListColumnId) {
+  const copyableProps = (text: string) => ({
+    className: 'copyable-text',
+    title: 'Doble clic para copiar',
+    onMouseDown: (event: ReactMouseEvent) => {
+      event.stopPropagation()
+    },
+    onClick: (event: ReactMouseEvent) => {
+      event.stopPropagation()
+    },
+    onDoubleClick: (event: ReactMouseEvent) => {
+      event.stopPropagation()
+      void copyText(text)
+    },
+  })
+
+  if (columnId === 'codigo_oc') {
+    const isPrivada = oc.tipo_oc === 'PRIVADA'
+    const displayCode = isPrivada ? oc.codigo_oc.replace(/^[A-Z]+-/, '') : oc.codigo_oc
+    return (
+      <span
+        {...copyableProps(oc.codigo_oc)}
+        className="copyable-text font-mono text-left text-blue-300"
+        title={isPrivada ? oc.codigo_oc : undefined}
+      >
+        {displayCode}
+      </span>
+    )
+  }
+  if (columnId === 'holding') {
+    const nombre = oc.holding_nombre || (oc.tipo_oc === 'PRIVADA' ? oc.codigo_organismo : '')
+    return nombre
+      ? <span {...copyableProps(nombre)} className="copyable-text text-gray-300">{nombre}</span>
+      : <span className="text-gray-600">-</span>
+  }
+  if (columnId === 'tipo_oc') {
+    return (
+      <span
+        className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
+          isCm(oc.tipo_oc) ? 'bg-violet-500/15 text-violet-300' : 'bg-gray-800 text-gray-300'
+        }`}
+      >
+        {oc.tipo_oc}
+      </span>
+    )
+  }
+  if (columnId === 'estado_mp') {
+    return <span {...copyableProps(oc.estado_mp)} className="copyable-text text-gray-400">{oc.estado_mp}</span>
+  }
+  if (columnId === 'estado_interno') {
+    return (
+      <span className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-medium ${estadoInternoBgClass(oc.estado_interno)}`}>
+        {oc.estado_interno}
+      </span>
+    )
+  }
+  if (columnId === 'fecha_envio') {
+    return <span {...copyableProps(fmtDate(oc.fecha_envio))} className="copyable-text text-gray-400">{fmtDate(oc.fecha_envio)}</span>
+  }
+  if (columnId === 'fecha_ingreso') {
+    const val = oc.fecha_ingreso ? fmtDate(oc.fecha_ingreso) : '-'
+    return <span {...copyableProps(val)} className={`copyable-text ${oc.fecha_ingreso ? 'text-green-400' : 'text-gray-600'}`}>{val}</span>
+  }
+  if (columnId === 'nombre_organismo') {
+    return (
+      <div className="max-w-[280px] whitespace-normal">
+        <div {...copyableProps(oc.nombre_organismo)} className="copyable-text text-gray-100" title={oc.nombre_organismo}>
+          {oc.nombre_organismo}
+        </div>
+      </div>
+    )
+  }
+  if (columnId === 'cliente_sap_sugerido') {
+    return <span {...copyableProps(oc.cliente_sap_sugerido || '')} className="copyable-text font-mono text-xs text-gray-200">{oc.cliente_sap_sugerido || '-'}</span>
+  }
+  if (columnId === 'cartera') {
+    return <span {...copyableProps(oc.cartera || '')} className="copyable-text text-gray-400">{oc.cartera || '-'}</span>
+  }
+  if (columnId === 'total') {
+    return <span {...copyableProps(fmtMoney(oc.total, oc.moneda))} className="copyable-text">{fmtMoney(oc.total, oc.moneda)}</span>
+  }
+  if (columnId === 'cantidad_lineas') {
+    return <span {...copyableProps(String(oc.cantidad_lineas))} className="copyable-text">{oc.cantidad_lineas}</span>
+  }
+  return null
 }

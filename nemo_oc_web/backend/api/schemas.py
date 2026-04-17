@@ -290,7 +290,7 @@ class ArtikosSyncOut(BaseModel):
 
 class ConfigOut(BaseModel):
     auth_enabled: bool
-    api_ticket: str
+    api_ticket_last_chars: str
     codigo_empresa: str
     rut_proveedor: str
     homologacion_path: str
@@ -307,13 +307,13 @@ class ConfigOut(BaseModel):
     smtp_host: str
     smtp_port: int
     smtp_user: str
-    smtp_password: str
+    smtp_password_configured: bool  # Solo indica si está configurada (sin devolver valor)
     smtp_enabled: bool
     redsalud_homo_path: str
     imap_server: str
     imap_port: int
     imap_folder: str
-    imap_filter_from: str
+    imap_filter_from_configured: bool  # Solo indica si está configurada
     licitaciones_path: str
     sap_columns: List[str]
     oc_list_columns: List[str]

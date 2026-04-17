@@ -4,6 +4,7 @@ Busca emails no leídos con PDFs adjuntos que coincidan con el filtro de asunto.
 Usa la misma App Password que el servicio SMTP (Gmail).
 """
 import email
+import html as html_module
 import imaplib
 import logging
 import os
@@ -75,7 +76,7 @@ def buscar_ocs_gmail(
     imap_server: str = "imap.gmail.com",
     imap_port: int = 993,
     imap_folder: str = "INBOX",
-    filter_subject: str = "ORDEN DE COMPRA",
+    filter_from: str = "ordenesdecompra@nemochile.cl",
     marcar_leidos: bool = True,
 ) -> List[Tuple[dict, str]]:
     """
@@ -100,18 +101,17 @@ def buscar_ocs_gmail(
         mail.login(smtp_user, smtp_password)
         mail.select(imap_folder)
 
-        # Buscar emails no leídos que contengan el filtro en el asunto
-        # IMAP search por asunto (case-insensitive en Gmail)
-        search_query = f'(UNSEEN SUBJECT "{filter_subject}")'
+        # Buscar emails no leídos enviados por el remitente indicado
+        search_query = f'(UNSEEN FROM "{filter_from}")'
         status, data = mail.search(None, search_query)
 
         if status != "OK" or not data[0]:
-            logger.info(f"IMAP: No hay emails nuevos con asunto '{filter_subject}'")
+            logger.info(f"IMAP: No hay emails nuevos del remitente '{filter_from}'")
             mail.logout()
             return []
 
         message_ids = data[0].split()
-        logger.info(f"IMAP: {len(message_ids)} email(s) encontrados con asunto '{filter_subject}'")
+        logger.info(f"IMAP: {len(message_ids)} email(s) encontrados del remitente '{filter_from}'")
 
         for msg_id in message_ids:
             status, msg_data = mail.fetch(msg_id, "(RFC822)")
@@ -184,3 +184,96 @@ def limpiar_temporales(pdf_paths: List[str]) -> None:
                 os.unlink(path)
         except Exception:
             pass
+
+
+def buscar_artikos_emails_gmail(
+    smtp_user: str,
+    smtp_password: str,
+    imap_server: str = "imap.gmail.com",
+    imap_port: int = 993,
+    imap_folder: str = "INBOX",
+    marcar_leidos: bool = True,
+) -> List[Tuple[dict, str]]:
+    """
+    Busca emails no leídos de Artikos y extrae la URL de OC del cuerpo.
+
+    Retorna lista de (metadata_dict, url_artikos).
+    """
+    _ARTIKOS_URL_RE = re.compile(
+        r'https?://art-p-ptk\.artikos\.cl/[^\s\'"<>\r\n]+Key2=[^\s\'"<>\r\n]+',
+        re.IGNORECASE,
+    )
+
+    if not smtp_user or not smtp_password:
+        raise ValueError("Se requieren credenciales SMTP/IMAP para conectar a Gmail.")
+
+    resultados: List[Tuple[dict, str]] = []
+
+    try:
+        mail = imaplib.IMAP4_SSL(imap_server, imap_port)
+        mail.login(smtp_user, smtp_password)
+        mail.select(imap_folder)
+
+        # Los emails de Artikos llegan reenviados con asunto "Nueva Orden de Compra"
+        status, data = mail.search(None, '(UNSEEN SUBJECT "Nueva Orden de Compra")')
+        if status != "OK" or not data[0]:
+            logger.info("IMAP Artikos: no hay emails nuevos con asunto 'Nueva Orden de Compra'")
+            mail.logout()
+            return []
+
+        message_ids = data[0].split()
+        logger.info(f"IMAP Artikos: {len(message_ids)} email(s) encontrados")
+
+        for msg_id in message_ids:
+            status, msg_data = mail.fetch(msg_id, "(RFC822)")
+            if status != "OK":
+                continue
+
+            raw_email = msg_data[0][1]
+            msg = email.message_from_bytes(raw_email)
+
+            subject    = _decode_str(msg.get("Subject", ""))
+            from_addr  = _decode_str(msg.get("From", ""))
+            date_str   = msg.get("Date", "")
+            message_id = msg.get("Message-ID", str(msg_id))
+
+            # Extraer URL del cuerpo (texto plano o HTML)
+            url = None
+            for part in msg.walk():
+                ctype = part.get_content_type()
+                if ctype not in ("text/plain", "text/html"):
+                    continue
+                payload = part.get_payload(decode=True)
+                if not payload:
+                    continue
+                charset = part.get_content_charset() or "utf-8"
+                body = payload.decode(charset, errors="replace")
+                m = _ARTIKOS_URL_RE.search(body)
+                if m:
+                    # Decodificar entidades HTML (&amp; → &) que aparecen en href="..."
+                    url = html_module.unescape(m.group(0).strip())
+                    break
+
+            if not url:
+                logger.warning(f"IMAP Artikos: email sin URL reconocible (asunto: {subject!r})")
+                continue
+
+            metadata = {
+                "subject":    subject,
+                "from_addr":  from_addr,
+                "date":       date_str,
+                "message_id": message_id,
+            }
+            resultados.append((metadata, url))
+
+            if marcar_leidos:
+                mail.store(msg_id, "+FLAGS", "\\Seen")
+
+        mail.logout()
+
+    except imaplib.IMAP4.error as e:
+        raise ConnectionError(f"Error IMAP Artikos: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Error inesperado en IMAP Artikos: {e}")
+
+    return resultados

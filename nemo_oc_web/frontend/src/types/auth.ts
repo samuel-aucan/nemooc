@@ -6,10 +6,12 @@ export interface AuthUser {
   activo: boolean
   last_login_at: string
   must_reset_password: boolean
+  auth_disabled: boolean
 }
 
 export interface BootstrapStatus {
   requires_setup: boolean
+  auth_disabled: boolean
 }
 
 export interface AuthCreateUserInput {
