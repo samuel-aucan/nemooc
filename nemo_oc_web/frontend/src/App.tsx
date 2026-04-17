@@ -1,16 +1,26 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import AppLayout from './components/layout/AppLayout'
 import ProtectedApp from './components/auth/ProtectedApp'
 import LoginPage from './components/auth/LoginPage'
-import OcListPage from './components/oc-list/OcListPage'
-import OcDetailPage from './components/oc-detail/OcDetailPage'
-import ImportPage from './components/import-page/ImportPage'
-import ConfigPage from './components/config-page/ConfigPage'
-import HoldingsPage from './components/holdings-page/HoldingsPage'
-import StatisticsPage from './components/statistics-page/StatisticsPage'
-import UsersPage from './components/users-page/UsersPage'
-import AuditoriaPage from './components/auditoria-page/AuditoriaPage'
+
+const OcListPage     = lazy(() => import('./components/oc-list/OcListPage'))
+const OcDetailPage   = lazy(() => import('./components/oc-detail/OcDetailPage'))
+const ImportPage     = lazy(() => import('./components/import-page/ImportPage'))
+const ConfigPage     = lazy(() => import('./components/config-page/ConfigPage'))
+const HoldingsPage   = lazy(() => import('./components/holdings-page/HoldingsPage'))
+const StatisticsPage = lazy(() => import('./components/statistics-page/StatisticsPage'))
+const UsersPage      = lazy(() => import('./components/users-page/UsersPage'))
+const AuditoriaPage  = lazy(() => import('./components/auditoria-page/AuditoriaPage'))
+
+function PageLoader() {
+  return (
+    <div className="flex h-full items-center justify-center py-20 text-sm text-gray-500">
+      Cargando...
+    </div>
+  )
+}
 
 export default function App() {
   return (
@@ -20,14 +30,14 @@ export default function App() {
           <Route path="login" element={<LoginPage />} />
           <Route element={<ProtectedApp />}>
             <Route element={<AppLayout />}>
-              <Route index element={<OcListPage />} />
-              <Route path="oc/:codigo" element={<OcDetailPage />} />
-              <Route path="import" element={<ImportPage />} />
-              <Route path="stats" element={<StatisticsPage />} />
-              <Route path="holdings" element={<HoldingsPage />} />
-              <Route path="users" element={<UsersPage />} />
-              <Route path="config" element={<ConfigPage />} />
-              <Route path="auditoria" element={<AuditoriaPage />} />
+              <Route index element={<Suspense fallback={<PageLoader />}><OcListPage /></Suspense>} />
+              <Route path="oc/:codigo" element={<Suspense fallback={<PageLoader />}><OcDetailPage /></Suspense>} />
+              <Route path="import" element={<Suspense fallback={<PageLoader />}><ImportPage /></Suspense>} />
+              <Route path="stats" element={<Suspense fallback={<PageLoader />}><StatisticsPage /></Suspense>} />
+              <Route path="holdings" element={<Suspense fallback={<PageLoader />}><HoldingsPage /></Suspense>} />
+              <Route path="users" element={<Suspense fallback={<PageLoader />}><UsersPage /></Suspense>} />
+              <Route path="config" element={<Suspense fallback={<PageLoader />}><ConfigPage /></Suspense>} />
+              <Route path="auditoria" element={<Suspense fallback={<PageLoader />}><AuditoriaPage /></Suspense>} />
             </Route>
           </Route>
         </Routes>
