@@ -4,12 +4,16 @@ homologa (CM) y persiste. Corre en un thread separado y comunica progreso via Qu
 """
 
 import logging
+import os
 import queue
 import threading
 import time
 from datetime import datetime
 
-from app.repositories import oc_repository
+try:
+    from backend.core.repo_selector import oc_repo as oc_repository
+except ImportError:
+    from app.repositories import oc_repository
 from app.services import transform_service
 from app.services.homologacion_service import get_homologacion_service
 from app.services.licitaciones_service import get_licitaciones_service
@@ -228,16 +232,17 @@ def run_sync(
             emit("progress", current=i, total=total_nuevas)
             continue
 
-        # Sincronizar en Supabase en background (no bloquea el loop)
-        try:
-            from backend.supabase_write_service import upsert_oc as _upsert_sb
-            _oc_snap, _lineas_snap = oc, lineas
-            threading.Thread(
-                target=lambda o=_oc_snap, l=_lineas_snap: _upsert_sb(o, l),
-                daemon=True,
-            ).start()
-        except Exception:
-            pass
+        # Upsert secundario a Supabase solo si el repo primario es SQLite
+        if os.getenv("DATA_SOURCE", "sqlite").lower() != "supabase":
+            try:
+                from backend.supabase_write_service import upsert_oc as _upsert_sb
+                _oc_snap, _lineas_snap = oc, lineas
+                threading.Thread(
+                    target=lambda o=_oc_snap, l=_lineas_snap: _upsert_sb(o, l),
+                    daemon=True,
+                ).start()
+            except Exception:
+                pass
 
         estados_finales = {
             "recepcion conforme",
@@ -365,19 +370,20 @@ def run_sync_light(
             finally:
                 conn.close()
 
-            # Sincronizar estado en Supabase en background (no bloquea el loop)
-            try:
-                from backend.supabase_write_service import upsert_oc as _upsert_sb
-                oc_obj = oc_repository.get_oc(codigo)
-                if oc_obj:
-                    lineas_obj = oc_repository.get_lineas(codigo)
-                    _oc_snap, _lineas_snap = oc_obj, lineas_obj
-                    threading.Thread(
-                        target=lambda o=_oc_snap, l=_lineas_snap: _upsert_sb(o, l),
-                        daemon=True,
-                    ).start()
-            except Exception:
-                pass
+            # Upsert secundario a Supabase solo si el repo primario es SQLite
+            if os.getenv("DATA_SOURCE", "sqlite").lower() != "supabase":
+                try:
+                    from backend.supabase_write_service import upsert_oc as _upsert_sb
+                    oc_obj = oc_repository.get_oc(codigo)
+                    if oc_obj:
+                        lineas_obj = oc_repository.get_lineas(codigo)
+                        _oc_snap, _lineas_snap = oc_obj, lineas_obj
+                        threading.Thread(
+                            target=lambda o=_oc_snap, l=_lineas_snap: _upsert_sb(o, l),
+                            daemon=True,
+                        ).start()
+                except Exception:
+                    pass
 
         except Exception as e:
             emit("log", message=f"  [{idx}/{total}] {codigo} - ERROR: {e}")
