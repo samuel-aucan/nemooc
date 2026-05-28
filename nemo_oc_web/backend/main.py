@@ -112,6 +112,18 @@ def health():
     return {"status": "ok", "app": "NEMONKEY"}
 
 
+@app.get("/api/v1/debug/ocs")
+def debug_ocs():
+    """Endpoint temporal de diagnóstico — eliminar después."""
+    import traceback
+    try:
+        from backend.core.repo_selector import oc_repo as _repo
+        ocs = _repo.get_all_ocs()
+        return {"ok": True, "count": len(ocs), "first": ocs[0].codigo_oc if ocs else None}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
 # ── Servir frontend React (solo en .exe; en dev Vite lo sirve) ───────────────
 def _fe_dist() -> Optional[Path]:
     if getattr(sys, 'frozen', False):
