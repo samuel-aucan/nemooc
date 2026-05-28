@@ -26,4 +26,8 @@ ENV DATA_SOURCE=supabase
 
 EXPOSE 8000
 
-CMD uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Script de inicio: garantiza expansión de $PORT en cualquier shell
+RUN printf '#!/bin/sh\nexec uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}\n' > /start.sh \
+    && chmod +x /start.sh
+
+CMD ["/start.sh"]
