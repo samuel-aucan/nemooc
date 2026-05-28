@@ -1,7 +1,7 @@
 """
 Servicio de escritura en Supabase.
 Sincroniza OC desde SQLite → Supabase PostgreSQL después de cada sync.
-Usa service_role key para bypassar RLS.
+Usa Management API (raw SQL) — NO depende del SDK supabase-py.
 Errores son silenciosos para no interrumpir el flujo principal.
 """
 import logging
@@ -11,68 +11,59 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Cliente lazy (se inicializa solo si están las variables de entorno)
-_client = None
 
+def _raw_sql(sql: str, params: list | None = None) -> list[dict]:
+    """Ejecuta SQL raw via Supabase Management API."""
+    import requests
 
-def _get_supabase():
-    global _client
-    if _client is not None:
-        return _client
+    pat = os.environ.get("SUPABASE_PAT", "")
+    project = os.environ.get("SUPABASE_PROJECT", "")
+    if not pat or not project:
+        raise RuntimeError("SUPABASE_PAT y SUPABASE_PROJECT requeridos")
 
-    url = os.getenv("SUPABASE_URL", "")
-    key = os.getenv("SUPABASE_SERVICE_KEY", "")
+    url = f"https://api.supabase.com/v1/projects/{project}/database/query"
+    headers = {"Authorization": f"Bearer {pat}", "Content-Type": "application/json"}
 
-    if not url or not key:
-        return None
+    if params:
+        for p in params:
+            if p is None:
+                replacement = "NULL"
+            elif isinstance(p, str):
+                safe = p.replace("'", "''")
+                replacement = f"'{safe}'"
+            elif isinstance(p, bool):
+                replacement = "TRUE" if p else "FALSE"
+            else:
+                replacement = str(p)
+            sql = sql.replace("%s", replacement, 1)
 
-    try:
-        from supabase import create_client
-        _client = create_client(url, key)
-        logger.info("[supabase_write] Cliente inicializado.")
-    except Exception as e:
-        logger.warning(f"[supabase_write] No se pudo inicializar cliente Supabase: {e}")
-        return None
-
-    return _client
+    r = requests.post(url, headers=headers, json={"query": sql}, timeout=30)
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"SQL raw error {r.status_code}: {r.text[:300]}")
+    data = r.json()
+    return data if isinstance(data, list) else []
 
 
 def _extraer_rut_base(valor: str) -> str:
-    """
-    Normaliza un RUT a solo dígitos sin DV.
-    '61.608.408-9' → '61608408'
-    'CN61608408'   → '61608408'
-    """
     if not valor:
         return ""
     rut = re.sub(r"^CN", "", valor, flags=re.IGNORECASE)
     rut = re.sub(r"[.\-\s]", "", rut)
     if len(rut) >= 9:
-        rut = rut[:-1]  # quitar DV
+        rut = rut[:-1]
     return rut
 
 
 def _lookup_cartera_id(rut_base: str) -> Optional[str]:
-    """Busca cartera_id en Supabase por codigo_sap.
-    Intenta con 'CN{rut}' (formato cartera Excel) y sin prefijo.
-    """
     if not rut_base:
         return None
-    sb = _get_supabase()
-    if not sb:
-        return None
-    # Buscar con ambos formatos: con prefijo CN y sin prefijo
-    candidatos = [f"CN{rut_base}", rut_base]
     try:
-        res = (
-            sb.table("clientes")
-            .select("cartera_id")
-            .in_("codigo_sap", candidatos)
-            .limit(1)
-            .execute()
+        candidatos = f"'CN{rut_base}', '{rut_base}'"
+        rows = _raw_sql(
+            f"SELECT cartera_id FROM clientes WHERE codigo_sap IN ({candidatos}) LIMIT 1"
         )
-        if res.data:
-            return res.data[0].get("cartera_id")
+        if rows:
+            return rows[0].get("cartera_id")
     except Exception as e:
         logger.debug(f"[supabase_write] lookup_cartera_id({rut_base}): {e}")
     return None
@@ -91,17 +82,27 @@ def _map_estado_homo(estado: str) -> str:
     return mapping.get(str(estado).lower(), "pendiente")
 
 
-def upsert_oc(oc, lineas: list) -> None:
-    """
-    Escribe una OC y sus líneas en Supabase (upsert por codigo_oc / nro_linea).
-    Recibe los objetos OrdenCompra y List[LineaOC] tal como vienen de sync_service.
-    """
-    sb = _get_supabase()
-    if not sb:
-        return
+def _sql_val(v) -> str:
+    """Convierte un valor Python a literal SQL."""
+    if v is None:
+        return "NULL"
+    if isinstance(v, bool):
+        return "TRUE" if v else "FALSE"
+    if isinstance(v, (int, float)):
+        return str(v)
+    safe = str(v).replace("'", "''")
+    return f"'{safe}'"
 
+
+def upsert_oc(oc, lineas: list) -> None:
+    """Escribe una OC y sus líneas en Supabase via raw SQL."""
     try:
-        # ── Determinar cartera_id ─────────────────────────────────────────────
+        pat = os.environ.get("SUPABASE_PAT", "")
+        project = os.environ.get("SUPABASE_PROJECT", "")
+        if not pat or not project:
+            return
+
+        # Determinar cartera_id
         cartera_id = None
         for candidato in [
             getattr(oc, "cliente_sap_sugerido", ""),
@@ -114,8 +115,8 @@ def upsert_oc(oc, lineas: list) -> None:
                     if cartera_id:
                         break
 
-        # ── Cabecera ──────────────────────────────────────────────────────────
-        cab = {
+        # Upsert cabecera
+        cab_cols = {
             "codigo_oc": oc.codigo_oc,
             "nombre_oc": getattr(oc, "nombre_oc", None) or None,
             "estado_mp": getattr(oc, "estado_mp", None) or None,
@@ -151,26 +152,33 @@ def upsert_oc(oc, lineas: list) -> None:
             "cartera_id": cartera_id,
             "tipo_origen": getattr(oc, "tipo_origen", "PUBLICA") or "PUBLICA",
             "codigo_licitacion": getattr(oc, "codigo_licitacion", None) or None,
-            # Preservar estado_interno/notas si ya existen: el upsert solo actualiza
-            # campos de API. Estado/notas del usuario no se sobrescriben porque
-            # en Supabase el ON CONFLICT lo gestiona con merge parcial.
-            # (Ver nota abajo sobre campos preservados)
         }
 
-        # Upsert cabecera — on_conflict='codigo_oc'
-        result = sb.table("oc_cabecera").upsert(
-            cab,
-            on_conflict="codigo_oc",
-            returning="representation",
-        ).execute()
+        cols = ", ".join(cab_cols.keys())
+        vals = ", ".join(_sql_val(v) for v in cab_cols.values())
+        # On conflict, update everything except codigo_oc, estado_interno, notas
+        update_parts = []
+        for k in cab_cols:
+            if k == "codigo_oc":
+                continue
+            update_parts.append(f"{k} = EXCLUDED.{k}")
 
-        if not result.data:
-            logger.warning(f"[supabase_write] upsert sin data para {oc.codigo_oc}")
+        sql = f"""
+            INSERT INTO oc_cabecera ({cols})
+            VALUES ({vals})
+            ON CONFLICT (codigo_oc) DO UPDATE SET
+                {', '.join(update_parts)},
+                updated_at = NOW()
+            RETURNING id
+        """
+        rows = _raw_sql(sql)
+        if not rows:
+            logger.warning(f"[supabase_write] upsert sin id para {oc.codigo_oc}")
             return
 
-        oc_id = result.data[0]["id"]
+        oc_id = rows[0]["id"]
 
-        # ── Líneas ────────────────────────────────────────────────────────────
+        # Upsert líneas
         for l in lineas:
             det = {
                 "oc_id": oc_id,
@@ -193,10 +201,20 @@ def upsert_oc(oc, lineas: list) -> None:
                 "sap_mode": getattr(l, "sap_mode", None) or None,
                 "factor_empaque": getattr(l, "factor_empaque", None),
             }
-            sb.table("oc_detalle").upsert(
-                det,
-                on_conflict="oc_id,nro_linea",
-            ).execute()
+
+            det_cols = ", ".join(det.keys())
+            det_vals = ", ".join(_sql_val(v) for v in det.values())
+            det_updates = ", ".join(
+                f"{k} = EXCLUDED.{k}" for k in det if k not in ("oc_id", "nro_linea")
+            )
+
+            det_sql = f"""
+                INSERT INTO oc_detalle ({det_cols})
+                VALUES ({det_vals})
+                ON CONFLICT (oc_id, nro_linea) DO UPDATE SET
+                    {det_updates}
+            """
+            _raw_sql(det_sql)
 
         logger.debug(f"[supabase_write] {oc.codigo_oc} sincronizada ({len(lineas)} líneas)")
 
@@ -204,24 +222,16 @@ def upsert_oc(oc, lineas: list) -> None:
         logger.warning(f"[supabase_write] Error en upsert_oc({getattr(oc, 'codigo_oc', '?')}): {e}")
 
 
-def sync_estado_oc(
-    codigo_oc: str,
-    fields: dict,
-) -> None:
-    """
-    Actualiza campos de estado/usuario en oc_cabecera de Supabase.
-    Llamar desde update_estado, marcar_ingresada, update_responsable, update_notas.
-    `fields` es un dict con las columnas Supabase a actualizar.
-    """
-    sb = _get_supabase()
-    if not sb:
-        return
-
+def sync_estado_oc(codigo_oc: str, fields: dict) -> None:
+    """Actualiza campos de estado/usuario en oc_cabecera."""
     if not fields:
         return
-
     try:
-        sb.table("oc_cabecera").update(fields).eq("codigo_oc", codigo_oc).execute()
+        set_parts = ", ".join(f"{k} = {_sql_val(v)}" for k, v in fields.items())
+        _raw_sql(
+            f"UPDATE oc_cabecera SET {set_parts}, updated_at = NOW() WHERE codigo_oc = %s",
+            [codigo_oc],
+        )
         logger.debug(f"[supabase_write] sync_estado_oc {codigo_oc}: {list(fields.keys())}")
     except Exception as e:
         logger.warning(f"[supabase_write] sync_estado_oc error ({codigo_oc}): {e}")
@@ -237,40 +247,30 @@ def sync_homologacion(
     sap_mode: Optional[str],
     estado_homologacion: str,
 ) -> None:
-    """
-    Actualiza oc_detalle en Supabase cuando se asigna o limpia un código SAP.
-    Llamar desde los endpoints asignar/limpiar de oc_routes.py.
-    """
-    sb = _get_supabase()
-    if not sb:
-        return
-
+    """Actualiza oc_detalle en Supabase cuando se asigna o limpia un código SAP."""
     try:
-        # Obtener oc_id
-        res = (
-            sb.table("oc_cabecera")
-            .select("id")
-            .eq("codigo_oc", codigo_oc)
-            .single()
-            .execute()
+        rows = _raw_sql(
+            "SELECT id FROM oc_cabecera WHERE codigo_oc = %s LIMIT 1",
+            [codigo_oc],
         )
-        if not res.data:
-            logger.debug(f"[supabase_write] sync_homologacion: {codigo_oc} no encontrada en Supabase")
+        if not rows:
+            logger.debug(f"[supabase_write] sync_homologacion: {codigo_oc} no encontrada")
             return
 
-        oc_id = res.data["id"]
+        oc_id = rows[0]["id"]
 
-        sb.table("oc_detalle").update(
-            {
-                "itemcode_sap": itemcode_sap or None,
-                "descripcion_sap": descripcion_sap or None,
-                "cantidad_sap": cantidad_sap,
-                "precio_sap": precio_sap,
-                "sap_mode": sap_mode or None,
-                "estado_homologacion": _map_estado_homo(estado_homologacion),
-            }
-        ).eq("oc_id", oc_id).eq("nro_linea", nro_linea).execute()
-
+        fields = {
+            "itemcode_sap": itemcode_sap or None,
+            "descripcion_sap": descripcion_sap or None,
+            "cantidad_sap": cantidad_sap,
+            "precio_sap": precio_sap,
+            "sap_mode": sap_mode or None,
+            "estado_homologacion": _map_estado_homo(estado_homologacion),
+        }
+        set_parts = ", ".join(f"{k} = {_sql_val(v)}" for k, v in fields.items())
+        _raw_sql(
+            f"UPDATE oc_detalle SET {set_parts} WHERE oc_id = {oc_id} AND nro_linea = {nro_linea}"
+        )
         logger.debug(f"[supabase_write] sync_homologacion {codigo_oc} linea {nro_linea}: OK")
 
     except Exception as e:

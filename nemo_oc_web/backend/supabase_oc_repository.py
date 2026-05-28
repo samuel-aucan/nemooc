@@ -183,25 +183,21 @@ def _row_to_linea(r: dict, codigo_oc: str = "") -> LineaOC:
 
 def get_existing_codes() -> Set[str]:
     """Retorna el conjunto de codigo_oc existentes."""
-    sb = _get_sb()
-    codes: Set[str] = set()
-    offset = 0
-    batch = 1000
-    while True:
-        r = sb.table("oc_cabecera").select("codigo_oc").range(offset, offset + batch - 1).execute()
-        if not r.data:
-            break
-        codes.update(row["codigo_oc"] for row in r.data)
-        if len(r.data) < batch:
-            break
-        offset += batch
-    return codes
+    try:
+        rows = _raw_sql("SELECT codigo_oc FROM oc_cabecera")
+        return {row["codigo_oc"] for row in rows}
+    except Exception as e:
+        logger.error(f"[supa_repo] get_existing_codes: {e}")
+        return set()
 
 
 def get_oc(codigo_oc: str) -> Optional[OrdenCompra]:
-    sb = _get_sb()
-    r = sb.table("oc_cabecera").select("*").eq("codigo_oc", codigo_oc).limit(1).execute()
-    return _row_to_oc(r.data[0]) if r.data else None
+    try:
+        rows = _raw_sql("SELECT * FROM oc_cabecera WHERE codigo_oc = %s LIMIT 1", [codigo_oc])
+        return _row_to_oc(rows[0]) if rows else None
+    except Exception as e:
+        logger.error(f"[supa_repo] get_oc({codigo_oc}): {e}")
+        return None
 
 
 def get_all_ocs(
@@ -362,23 +358,23 @@ def get_stats() -> dict:
 
 def _get_oc_id(codigo_oc: str) -> Optional[str]:
     """Obtiene el UUID de oc_cabecera para un codigo_oc dado."""
-    sb = _get_sb()
-    r = sb.table("oc_cabecera").select("id").eq("codigo_oc", codigo_oc).limit(1).execute()
-    return r.data[0]["id"] if r.data else None
+    try:
+        rows = _raw_sql("SELECT id FROM oc_cabecera WHERE codigo_oc = %s LIMIT 1", [codigo_oc])
+        return rows[0]["id"] if rows else None
+    except Exception:
+        return None
 
 
 def get_lineas(codigo_oc: str) -> List[LineaOC]:
-    sb = _get_sb()
     oc_id = _get_oc_id(codigo_oc)
     if not oc_id:
         return []
     try:
-        r = (sb.table("oc_detalle")
-             .select("*")
-             .eq("oc_id", oc_id)
-             .order("nro_linea")
-             .execute())
-        return [_row_to_linea(row, codigo_oc) for row in r.data]
+        rows = _raw_sql(
+            "SELECT * FROM oc_detalle WHERE oc_id = %s ORDER BY nro_linea",
+            [oc_id],
+        )
+        return [_row_to_linea(row, codigo_oc) for row in rows]
     except Exception as e:
         logger.error(f"[supa_repo] get_lineas({codigo_oc}): {e}")
         return []
@@ -391,18 +387,13 @@ def get_estado_historial(codigo_oc: str, limit: int = 10) -> List[dict]:
     if not oc_id:
         return []
     try:
-        sb = _get_sb()
-        r = (sb.table("oc_estado_historial")
-             .select("*")
-             .eq("oc_id", oc_id)
-             .order("created_at", desc=True)
-             .limit(limit)
-             .execute())
-        # Normalizar nombres de columna al formato que espera el frontend (SQLite style)
+        rows = _raw_sql(
+            "SELECT * FROM oc_estado_historial WHERE oc_id = %s ORDER BY created_at DESC LIMIT %s",
+            [oc_id, limit],
+        )
         result = []
-        for row in r.data:
+        for row in rows:
             raw_id = row.get("id", "")
-            # EstadoHistorialOut espera id: int — convertir UUID a int estable
             int_id = abs(hash(str(raw_id))) % (2**31)
             result.append({
                 "id": int_id,
@@ -411,7 +402,7 @@ def get_estado_historial(codigo_oc: str, limit: int = 10) -> List[dict]:
                 "estado_nuevo": row.get("estado_nuevo"),
                 "origen": row.get("origen"),
                 "actor_user_id": None,
-                "actor_username": row.get("actor_nombre") or "",  # non-optional en schema
+                "actor_username": row.get("actor_nombre") or "",
                 "changed_at": row.get("created_at"),
             })
         return result
@@ -422,16 +413,13 @@ def get_estado_historial(codigo_oc: str, limit: int = 10) -> List[dict]:
 
 def get_document_source(codigo_oc: str) -> Optional[dict]:
     try:
-        sb = _get_sb()
-        r = (sb.table("oc_document_source")
-             .select("*")
-             .eq("codigo_oc", codigo_oc)
-             .limit(1)
-             .execute())
-        if not r.data:
+        rows = _raw_sql(
+            "SELECT * FROM oc_document_source WHERE codigo_oc = %s LIMIT 1",
+            [codigo_oc],
+        )
+        if not rows:
             return None
-        data = dict(r.data[0])
-        # Parsear access_payload si es string
+        data = dict(rows[0])
         payload = data.get("access_payload") or ""
         if isinstance(payload, str) and payload:
             import json
@@ -470,24 +458,31 @@ def upsert_document_source(
     **kwargs,
 ) -> None:
     import json
-    sb = _get_sb()
     payload_str = json.dumps(access_payload) if access_payload and not isinstance(access_payload, str) else (access_payload or "")
-    row = {
-        "codigo_oc": codigo_oc,
-        "source_type": source_type,
-        "source_locator": source_locator or None,
-        "access_payload": payload_str or None,
-        "snapshot_type": snapshot_type or None,
-        "snapshot_path": snapshot_path or None,
-        "snapshot_sha256": snapshot_sha256 or None,
-        "snapshot_size_bytes": snapshot_size_bytes or 0,
-        "document_available": document_available,
-        "document_regenerable": document_regenerable,
-        "last_verified_at": last_verified_at or None,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
     try:
-        sb.table("oc_document_source").upsert(row, on_conflict="codigo_oc").execute()
+        _raw_sql("""
+            INSERT INTO oc_document_source (codigo_oc, source_type, source_locator, access_payload,
+                snapshot_type, snapshot_path, snapshot_sha256, snapshot_size_bytes,
+                document_available, document_regenerable, last_verified_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (codigo_oc) DO UPDATE SET
+                source_type = EXCLUDED.source_type,
+                source_locator = EXCLUDED.source_locator,
+                access_payload = EXCLUDED.access_payload,
+                snapshot_type = EXCLUDED.snapshot_type,
+                snapshot_path = EXCLUDED.snapshot_path,
+                snapshot_sha256 = EXCLUDED.snapshot_sha256,
+                snapshot_size_bytes = EXCLUDED.snapshot_size_bytes,
+                document_available = EXCLUDED.document_available,
+                document_regenerable = EXCLUDED.document_regenerable,
+                last_verified_at = EXCLUDED.last_verified_at,
+                updated_at = EXCLUDED.updated_at
+        """, [
+            codigo_oc, source_type, source_locator or None, payload_str or None,
+            snapshot_type or None, snapshot_path or None, snapshot_sha256 or None,
+            snapshot_size_bytes or 0, document_available, document_regenerable,
+            last_verified_at or None, datetime.now(timezone.utc).isoformat(),
+        ])
     except Exception as e:
         logger.warning(f"[supa_repo] upsert_document_source({codigo_oc}): {e}")
 
@@ -505,14 +500,11 @@ def actualizar_estado(
     try:
         oc_id = _get_oc_id(codigo_oc)
         if oc_id:
-            _get_sb().table("oc_estado_historial").insert({
-                "oc_id": oc_id,
-                "estado_anterior": None,
-                "estado_nuevo": estado,
-                "origen": "selector_estado",
-                "actor_nombre": actor_username or None,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }).execute()
+            _raw_sql("""
+                INSERT INTO oc_estado_historial (oc_id, estado_anterior, estado_nuevo, origen, actor_nombre, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, [oc_id, None, estado, "selector_estado", actor_username or None,
+                  datetime.now(timezone.utc).isoformat()])
     except Exception as e:
         logger.debug(f"[supa_repo] historial actualizar_estado: {e}")
 
@@ -533,14 +525,11 @@ def marcar_ingresada(
     try:
         oc_id = _get_oc_id(codigo_oc)
         if oc_id:
-            _get_sb().table("oc_estado_historial").insert({
-                "oc_id": oc_id,
-                "estado_anterior": None,
-                "estado_nuevo": "Ingresada",
-                "origen": "ingresada",
-                "actor_nombre": actor_username or None,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }).execute()
+            _raw_sql("""
+                INSERT INTO oc_estado_historial (oc_id, estado_anterior, estado_nuevo, origen, actor_nombre, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, [oc_id, None, "Ingresada", "ingresada", actor_username or None,
+                  datetime.now(timezone.utc).isoformat()])
     except Exception as e:
         logger.debug(f"[supa_repo] historial marcar_ingresada: {e}")
 
