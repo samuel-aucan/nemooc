@@ -15,6 +15,7 @@ _PATCH = [
     ("nemo_oc_web/backend/supabase_oc_repository.py",   "/app/nemo_oc_web/backend/supabase_oc_repository.py"),
     ("nemo_oc_web/backend/supabase_write_service.py",   "/app/nemo_oc_web/backend/supabase_write_service.py"),
     ("nemo_oc_web/backend/main.py",                     "/app/nemo_oc_web/backend/main.py"),
+    ("nemo_oc/app/services/sync_service.py",            "/app/nemo_oc/app/services/sync_service.py"),
 ]
 
 for _src, _dst in _PATCH:
