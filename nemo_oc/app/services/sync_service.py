@@ -192,7 +192,7 @@ def run_sync(
 
         if not tiene_items or not items_data.get("Listado"):
             emit("log", message="    Sin items en lista, consultando detalle...")
-            time.sleep(0.8)
+            time.sleep(0.3)
             try:
                 raw_detalle = api.obtener_detalle_oc(codigo)
             except APIError as e:
@@ -228,10 +228,14 @@ def run_sync(
             emit("progress", current=i, total=total_nuevas)
             continue
 
-        # Sincronizar en Supabase (silencioso, no interrumpe el flujo)
+        # Sincronizar en Supabase en background (no bloquea el loop)
         try:
             from backend.supabase_write_service import upsert_oc as _upsert_sb
-            _upsert_sb(oc, lineas)
+            _oc_snap, _lineas_snap = oc, lineas
+            threading.Thread(
+                target=lambda o=_oc_snap, l=_lineas_snap: _upsert_sb(o, l),
+                daemon=True,
+            ).start()
         except Exception:
             pass
 
@@ -361,13 +365,17 @@ def run_sync_light(
             finally:
                 conn.close()
 
-            # Sincronizar estado en Supabase (silencioso)
+            # Sincronizar estado en Supabase en background (no bloquea el loop)
             try:
                 from backend.supabase_write_service import upsert_oc as _upsert_sb
                 oc_obj = oc_repository.get_oc(codigo)
                 if oc_obj:
                     lineas_obj = oc_repository.get_lineas(codigo)
-                    _upsert_sb(oc_obj, lineas_obj)
+                    _oc_snap, _lineas_snap = oc_obj, lineas_obj
+                    threading.Thread(
+                        target=lambda o=_oc_snap, l=_lineas_snap: _upsert_sb(o, l),
+                        daemon=True,
+                    ).start()
             except Exception:
                 pass
 
