@@ -1,0 +1,27 @@
+# Ignorar node_modules y builds del frontend
+nemo_oc_web/frontend/node_modules/
+nemo_oc_web/frontend/dist/
+nemo_oc_web/dist/
+nemo_oc_web/build/
+nemo_oc_web/build_*/
+
+# Ignorar datos locales SQLite y archivos de sesion
+nemo_oc_web/data/
+nemo_oc/data/
+
+# Ignorar cache Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Ignorar archivos de entorno locales
+.env.local
+*.env.local
+
+# Ignorar respaldos
+RESPALDOS/
+
+# Ignorar archivos temporales
+*.tmp
+*.log
