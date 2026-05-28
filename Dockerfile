@@ -26,8 +26,7 @@ ENV DATA_SOURCE=supabase
 
 EXPOSE 8000
 
-# Script de inicio: garantiza expansión de $PORT en cualquier shell
-RUN printf '#!/bin/sh\nexec uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}\n' > /start.sh \
-    && chmod +x /start.sh
+# Entrypoint Python: lee PORT del entorno sin depender de shell expansion
+COPY start.py /app/start.py
 
-CMD ["/start.sh"]
+CMD ["python", "/app/start.py"]
