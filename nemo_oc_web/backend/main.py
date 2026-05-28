@@ -124,6 +124,28 @@ def debug_ocs():
         return {"ok": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
+@app.get("/api/v1/debug/ocs-full")
+def debug_ocs_full():
+    """Simula list_ocs completo sin auth para diagnosticar 500."""
+    import traceback
+    try:
+        from backend.core.repo_selector import oc_repo as _repo
+        from backend.api.oc_routes import _enrich_oc, OrdenCompraOut
+        ocs = _repo.get_all_ocs()
+        step = "get_all_ocs OK"
+        holdings_map = _repo.get_holdings_map()
+        step = "get_holdings_map OK"
+        enriched = []
+        for i, oc in enumerate(ocs[:5]):
+            try:
+                enriched.append(OrdenCompraOut(**_enrich_oc(oc, holdings_map)).dict())
+            except Exception as e:
+                return {"ok": False, "step": f"enrich OC #{i} {oc.codigo_oc}", "error": str(e), "traceback": traceback.format_exc()}
+        return {"ok": True, "step": step, "count": len(ocs), "sample": enriched}
+    except Exception as e:
+        return {"ok": False, "step": step if 'step' in dir() else "unknown", "error": str(e), "traceback": traceback.format_exc()}
+
+
 # ── Servir frontend React (solo en .exe; en dev Vite lo sirve) ───────────────
 def _fe_dist() -> Optional[Path]:
     if getattr(sys, 'frozen', False):
