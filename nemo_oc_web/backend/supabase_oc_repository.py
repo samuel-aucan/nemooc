@@ -309,10 +309,9 @@ def get_distinct_tipos() -> List[str]:
 
 
 def get_holdings_map() -> dict:
-    sb = _get_sb()
     try:
-        r = sb.table("holdings").select("id,nombre").eq("activo", True).execute()
-        return {row["id"]: row["nombre"] for row in r.data}
+        rows = _raw_sql("SELECT id, nombre FROM holdings WHERE activo = TRUE")
+        return {row["id"]: row["nombre"] for row in rows}
     except Exception as e:
         logger.error(f"[supa_repo] get_holdings_map: {e}")
         return {}
@@ -567,7 +566,8 @@ def actualizar_campos_publicos(codigo_oc: str, campos: dict) -> None:
     allowed = {
         "estado_mp", "codigo_estado_mp", "fecha_envio", "fecha_aceptacion",
         "fecha_cancelacion", "fecha_ultima_modificacion", "total_neto",
-        "total", "total_impuestos", "moneda",
+        "total", "total_impuestos", "moneda", "codigo_licitacion",
+        "direccion_despacho", "direccion_facturacion",
     }
     clean = {k: v for k, v in campos.items() if k in allowed}
     if clean:
