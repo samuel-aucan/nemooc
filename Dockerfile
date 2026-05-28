@@ -7,11 +7,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
+# Cache bust — incrementar para forzar rebuild completo
+ARG CACHEBUST=20260528001
+RUN echo "Cache bust: $CACHEBUST"
+
 # Copiar nemo_oc (core: modelos, servicios, repositorio)
 COPY nemo_oc/ /app/nemo_oc/
 
 # Copiar backend web
 COPY nemo_oc_web/ /app/nemo_oc_web/
+
+# Copias explícitas de módulos críticos (garantiza que estén aunque haya cache)
+COPY nemo_oc_web/backend/api/gd_routes.py /app/nemo_oc_web/backend/api/gd_routes.py
+COPY nemo_oc_web/backend/api/poc_sse.py /app/nemo_oc_web/backend/api/poc_sse.py
+COPY nemo_oc_web/backend/core/repo_selector.py /app/nemo_oc_web/backend/core/repo_selector.py
+COPY nemo_oc_web/backend/supabase_oc_repository.py /app/nemo_oc_web/backend/supabase_oc_repository.py
 
 # Instalar dependencias Python
 RUN pip install --no-cache-dir -r /app/nemo_oc_web/requirements.txt
