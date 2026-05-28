@@ -28,6 +28,7 @@ router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
 
 # Almacena queues activas: sync_id → queue.Queue
 _active: Dict[str, queue.Queue] = {}
+SYNC_QUEUE_RECONNECT_TTL_SECONDS = 600
 
 # Log global para la memoria de auto-sync y manual sync
 GLOBAL_SYNC_LOGS = []
@@ -38,6 +39,17 @@ def _add_global_log(msg: str):
     if len(GLOBAL_SYNC_LOGS) > 300:
         GLOBAL_SYNC_LOGS.pop(0)
 
+
+def _schedule_sync_cleanup(sync_id: str, ttl_seconds: int = SYNC_QUEUE_RECONNECT_TTL_SECONDS):
+    """Mantiene la cola un rato para permitir reconexiones SSE y luego la limpia."""
+
+    def _cleanup():
+        _active.pop(sync_id, None)
+
+    timer = threading.Timer(ttl_seconds, _cleanup)
+    timer.daemon = True
+    timer.start()
+
 @router.get("/logs")
 def get_global_logs():
     return {"logs": GLOBAL_SYNC_LOGS}
@@ -45,15 +57,26 @@ def get_global_logs():
 @router.get("/status")
 def get_sync_status():
     # Retorna si hay alguna sincronización activa (útil para el frontend)
-    from backend.core.tasks import get_next_light_sync_time
+    from backend.core.tasks import (
+        get_last_successful_sync_time,
+        get_next_light_sync_time,
+        get_next_scheduled_sync_time,
+    )
 
     running = len(_active) > 0
+    last_sync_at = get_last_successful_sync_time()
+    next_scheduled_sync = get_next_scheduled_sync_time()
     next_light_sync = get_next_light_sync_time()
+    last_sync_at_str = last_sync_at.isoformat() if last_sync_at else None
+    next_scheduled_sync_str = next_scheduled_sync.isoformat() if next_scheduled_sync else None
     next_light_sync_str = next_light_sync.isoformat() if next_light_sync else None
 
     return {
         "running": running,
         "active_tasks": list(_active.keys()),
+        "last_sync_at": last_sync_at_str,
+        "last_mp_sync_at": last_sync_at_str,
+        "next_sync_at": next_scheduled_sync_str,
         "next_light_sync": next_light_sync_str,
     }
 
@@ -64,6 +87,7 @@ MAX_SYNC_DAYS = int(os.getenv("NEMOOC_SYNC_MAX_DAYS", "90"))
 @router.post("/mercado-publico", response_model=SyncStartOut)
 def start_sync_mp(body: SyncMpIn):
     from app.services.sync_service import run_sync
+    from backend.core.tasks import record_mp_sync_success
 
     cfg = load_config()
     if not cfg.api_ticket:
@@ -90,16 +114,21 @@ def start_sync_mp(body: SyncMpIn):
 
     def _worker():
         try:
-            run_sync(
+            result = run_sync(
                 ticket=cfg.api_ticket,
                 codigo_empresa=cfg.codigo_empresa,
                 fecha_desde=fecha_desde,
                 fecha_hasta=fecha_hasta,
                 progress_queue=q,
                 solo_cm=body.solo_cm,
+                ruts_filter=body.ruts_filter,
             )
+            if result.get("ok"):
+                record_mp_sync_success()
         except Exception as e:
             q.put({"type": "error", "message": str(e)})
+        finally:
+            _schedule_sync_cleanup(sync_id)
 
     threading.Thread(target=_worker, daemon=True).start()
     return SyncStartOut(sync_id=sync_id)
@@ -127,7 +156,7 @@ async def sync_mp_progress(sync_id: str):
                     yield {"event": "heartbeat", "data": ""}
                     await asyncio.sleep(0.3)
         except asyncio.CancelledError:
-            _active.pop(sync_id, None)
+            return
 
     return EventSourceResponse(generator())
 
@@ -141,7 +170,8 @@ def start_sync_mp_light(
     Sincronización ligera: solo actualiza estado_mp de OCs existentes.
     Por defecto cubre los últimos 30 días; acepta rango personalizado.
     """
-    from app.services.sync_service import start_sync_light_thread
+    from app.services.sync_service import run_sync_light
+    from backend.core.tasks import record_mp_sync_success
     from datetime import timedelta
 
     cfg = load_config()
@@ -164,13 +194,26 @@ def start_sync_mp_light(
         except ValueError:
             raise HTTPException(400, detail="fecha_desde inválida. Use YYYY-MM-DD")
 
-    q = start_sync_light_thread(
-        ticket=cfg.api_ticket,
-        codigo_empresa=cfg.codigo_empresa,
-        fecha_desde=_fecha_desde,
-        fecha_hasta=_fecha_hasta,
-    )
+    q: queue.Queue = queue.Queue()
     _active[sync_id] = q
+
+    def _worker():
+        try:
+            result = run_sync_light(
+                ticket=cfg.api_ticket,
+                codigo_empresa=cfg.codigo_empresa,
+                fecha_desde=_fecha_desde,
+                fecha_hasta=_fecha_hasta,
+                progress_queue=q,
+            )
+            if result.get("ok"):
+                record_mp_sync_success()
+        except Exception as e:
+            q.put({"type": "error", "message": str(e)})
+        finally:
+            _schedule_sync_cleanup(sync_id)
+
+    threading.Thread(target=_worker, daemon=True).start()
     return SyncStartOut(sync_id=sync_id)
 
 
@@ -196,7 +239,7 @@ async def sync_mp_light_progress(sync_id: str):
                     yield {"event": "heartbeat", "data": ""}
                     await asyncio.sleep(0.3)
         except asyncio.CancelledError:
-            _active.pop(sync_id, None)
+            return
 
     return EventSourceResponse(generator())
 
@@ -243,6 +286,8 @@ def start_sync_gmail(body: SyncGmailIn):
             )
         except Exception as e:
             q.put({"type": "error", "message": str(e)})
+        finally:
+            _schedule_sync_cleanup(sync_id)
 
     threading.Thread(target=_worker, daemon=True).start()
     return SyncStartOut(sync_id=sync_id)
@@ -269,30 +314,88 @@ async def sync_gmail_progress(sync_id: str):
                     yield {"event": "heartbeat", "data": ""}
                     await asyncio.sleep(0.3)
         except asyncio.CancelledError:
-            _active.pop(sync_id, None)
+            return
 
     return EventSourceResponse(generator())
 
 
 # ── Artikos (scraping portal web) ────────────────────────────────────────────
 
+@router.post("/exportar-supabase")
+def exportar_todo_a_supabase():
+    """
+    Lee todas las OC desde SQLite y las vuelca a Supabase.
+    Útil para migración inicial o re-sincronización manual.
+    """
+    from app.repositories.oc_repository import get_all_ocs, get_lineas
+    from backend.supabase_write_service import upsert_oc
+
+    try:
+        ocs = get_all_ocs()
+    except Exception as e:
+        raise HTTPException(500, detail=f"Error leyendo SQLite: {e}")
+
+    ok = 0
+    errores = 0
+    errores_detalle = []
+
+    for oc in ocs:
+        try:
+            lineas = get_lineas(oc.codigo_oc)
+            upsert_oc(oc, lineas)
+            ok += 1
+        except Exception as e:
+            errores += 1
+            errores_detalle.append({"codigo_oc": oc.codigo_oc, "error": str(e)})
+
+    _add_global_log(f"Exportación Supabase: {ok} OC exportadas, {errores} errores")
+    return {"ok": True, "exportadas": ok, "errores": errores, "detalle_errores": errores_detalle}
+
+
 @router.post("/artikos", response_model=ArtikosSyncOut)
 def importar_artikos(body: ArtikosSyncIn):
-    from app.services.artikos_scraper import scrape_oc
-    from app.repositories import oc_repository
+    from app.config import load_config
+    from backend.core.repo_selector import oc_repo as oc_repository
+    from app.services.artikos_scraper import scrape_oc_with_metadata
+    from app.services.document_snapshot_service import save_html_snapshot
 
     if not body.url or "artikos" not in body.url.lower():
         raise HTTPException(400, detail="URL no válida. Debe ser un link del portal Artikos.")
 
+    cfg = load_config()
+
     try:
-        oc, lineas = scrape_oc(body.url)
+        oc, lineas, scrape_meta = scrape_oc_with_metadata(
+            body.url,
+            rut_proveedor=cfg.rut_proveedor,
+            codigo_empresa=cfg.codigo_empresa,
+        )
     except ValueError as e:
         raise HTTPException(400, detail=str(e))
     except Exception as e:
         raise HTTPException(502, detail=f"Error accediendo al portal Artikos: {e}")
 
+    snapshot_meta = save_html_snapshot("artikos", oc.codigo_oc, scrape_meta.get("html", ""))
+    access_payload = {
+        "credential_kind": scrape_meta.get("credential_kind", ""),
+        "credential_preview": scrape_meta.get("credential_preview", ""),
+        "credential_attempts": scrape_meta.get("credential_attempts", []),
+        "hidden_fields": scrape_meta.get("hidden_fields", []),
+        "print_available": bool(scrape_meta.get("print_available")),
+    }
+
     existentes = oc_repository.get_existing_codes()
     if oc.codigo_oc in existentes:
+        oc_repository.upsert_document_source(
+            oc.codigo_oc,
+            source_type="artikos",
+            source_locator=body.url,
+            access_payload=access_payload,
+            document_available=True,
+            document_regenerable=True,
+            last_verified_at=scrape_meta.get("verified_at", ""),
+            **snapshot_meta,
+        )
         return ArtikosSyncOut(
             ok=True,
             codigo_oc=oc.codigo_oc,
@@ -302,6 +405,16 @@ def importar_artikos(body: ArtikosSyncIn):
         )
 
     oc_repository.save_oc(oc, lineas)
+    oc_repository.upsert_document_source(
+        oc.codigo_oc,
+        source_type="artikos",
+        source_locator=body.url,
+        access_payload=access_payload,
+        document_available=True,
+        document_regenerable=True,
+        last_verified_at=scrape_meta.get("verified_at", ""),
+        **snapshot_meta,
+    )
     _add_global_log(f"OC Artikos importada: {oc.codigo_oc} — {oc.nombre_organismo}")
 
     return ArtikosSyncOut(

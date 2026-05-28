@@ -44,9 +44,17 @@ class OrdenCompraOut(BaseModel):
     cantidad_lineas: int
     estado_interno: str
     fecha_ingreso: Optional[str]
+    responsable_ingreso_user_id: Optional[int] = None
+    responsable_ingreso_username: str = ""
+    ingresado_por_user_id: Optional[int] = None
+    ingresado_por_username: str = ""
+    ingreso_sap_acuerdo_global: bool = False
     notas: Optional[str]
+    created_at: str = ""
+    updated_at: str = ""
     # Enriquecidos desde cartera
     cartera: str = ""
+    vendedor: str = ""
     region_nombre: str = ""
     razon_social: str = ""
     holding_nombre: str = ""
@@ -73,14 +81,53 @@ class LineaOCOut(BaseModel):
     factor_empaque: float
     cantidad_sap: Optional[float]
     precio_sap: Optional[float]
+    sap_mode: Optional[str]
+    sap_mode_origen: Optional[str]
     itemcode_sap: Optional[str]
     descripcion_sap: Optional[str]
     estado_homologacion: str
+    sap_mode_sugerido: Optional[str] = None
+    sap_mode_historial_total: int = 0
+    sap_mode_historial_display: int = 0
+    sap_mode_historial_unitario: int = 0
+    sap_values_origen: Optional[str] = None
+    sap_values_updated_at: str = ""
+    sap_values_updated_by_user_id: Optional[int] = None
+    sap_values_updated_by_username: str = ""
+
+
+class EstadoHistorialOut(BaseModel):
+    id: int
+    codigo_oc: str
+    estado_anterior: Optional[str]
+    estado_nuevo: str
+    origen: str
+    actor_user_id: Optional[int] = None
+    actor_username: str = ""
+    changed_at: str
+
+
+class DocumentoFuenteOut(BaseModel):
+    codigo_oc: str
+    source_type: str
+    source_locator: str = ""
+    access_payload: Optional[dict] = None
+    snapshot_type: str = ""
+    snapshot_path: str = ""
+    snapshot_sha256: str = ""
+    snapshot_size_bytes: int = 0
+    document_available: bool = False
+    document_regenerable: bool = False
+    last_verified_at: str = ""
+    created_at: str = ""
+    updated_at: str = ""
 
 
 class OcDetailOut(BaseModel):
     cabecera: OrdenCompraOut
     lineas: List[LineaOCOut]
+    historial_estados: List[EstadoHistorialOut]
+    documento: Optional[DocumentoFuenteOut] = None
 
 
 class StatsOut(BaseModel):
@@ -108,7 +155,95 @@ class AnalyticsSummaryOut(BaseModel):
     pendientes_sin_texto: int
 
 
-class HoldingOut(BaseModel):
+class AnalyticsDailyPointOut(BaseModel):
+    fecha: str
+    cantidad_ocs: int
+    monto_total: float
+
+
+class AnalyticsRankingItemOut(BaseModel):
+    label: str
+    cantidad_ocs: int
+    monto_total: float
+
+
+class AnalyticsTodayOut(BaseModel):
+    fecha: str
+    recibidas_ocs: int
+    recibidas_lineas: int
+    recibidas_monto: float
+    ingresadas_ocs: int
+    ingresadas_lineas: int
+    ingresadas_monto: float
+    same_day_ocs: int
+    same_day_monto: float
+    same_day_ratio_pct: float
+    throughput_pct: float
+    backlog_neto: int
+    listas_sap: int
+    bloqueadas: int
+    aceptadas_sin_ingresar: int
+
+
+class AnalyticsUserProductivityOut(BaseModel):
+    user_id: Optional[int] = None
+    username: str
+    ocs_asignadas: int
+    recibidas_hoy_asignadas: int
+    same_day_ocs: int
+    same_day_ratio_pct: float
+    ingresadas_hoy: int
+    ingresadas_total_rango: int
+    lineas_ingresadas: int
+    monto_ingresado: float
+    privadas_ingresadas: int
+    acuerdos_globales_ingresados: int
+    backlog_pendiente: int
+
+
+class AnalyticsAgingBucketOut(BaseModel):
+    bucket: str
+    cantidad_ocs: int
+    monto_total: float
+
+
+class AnalyticsAgingOut(BaseModel):
+    listas_sap: List[AnalyticsAgingBucketOut] = []
+    bloqueadas: List[AnalyticsAgingBucketOut] = []
+    aceptadas_sin_ingresar: List[AnalyticsAgingBucketOut] = []
+
+
+class AnalyticsFunnelItemOut(BaseModel):
+    stage: str
+    label: str
+    cantidad_ocs: int
+    monto_total: float
+
+
+class AnalyticsPrivateOut(BaseModel):
+    recibidas: int
+    requieren_revision: int
+    parser_fallido: int
+    pdf_recuperable: int
+
+
+class AnalyticsSyncHealthOut(BaseModel):
+    running: bool = False
+    active_tasks: List[str] = []
+    last_mp_sync_at: Optional[str] = None
+    next_sync_at: Optional[str] = None
+    next_light_sync: Optional[str] = None
+    errores_recientes: int = 0
+
+
+class AnalyticsBlockingProductOut(BaseModel):
+    label: str
+    cantidad_lineas: int
+    cantidad_ocs: int
+    monto_total: float
+
+
+class HoldingFiltroOut(BaseModel):
     id: str
     nombre: str
 
@@ -117,7 +252,7 @@ class FiltrosOut(BaseModel):
     estados_mp: List[str]
     tipos: List[str]
     carteras: List[str]
-    holdings: List[HoldingOut] = []
+    holdings: List[HoldingFiltroOut] = []
 
 
 class SapTextOut(BaseModel):
@@ -133,7 +268,49 @@ class AsignarItemcodeIn(BaseModel):
     origen: str = "manual"  # 'sugerencia' | 'manual'
 
 
+class SapModeIn(BaseModel):
+    mode: str  # 'unitario' | 'display'
+
+
 # ── Sugerencia ───────────────────────────────────────────────────────────────
+
+class SapValuesIn(BaseModel):
+    cantidad_sap: float
+    precio_sap: float
+
+
+class SapValuesOut(BaseModel):
+    codigo_oc: str
+    correlativo: int
+    cantidad_sap: float
+    precio_sap: float
+    sap_values_origen: str
+    sap_values_updated_at: str = ""
+    sap_values_updated_by_user_id: Optional[int] = None
+    sap_values_updated_by_username: str = ""
+
+
+class SapValuesHistoryOut(BaseModel):
+    id: int
+    codigo_oc: str
+    correlativo: int
+    codigo_mp: Optional[str] = None
+    itemcode_sap: Optional[str] = None
+    tipo_oc: Optional[str] = None
+    rut_unidad: Optional[str] = None
+    cantidad_base: Optional[float] = None
+    precio_base: Optional[float] = None
+    cantidad_anterior: Optional[float] = None
+    precio_anterior: Optional[float] = None
+    cantidad_nueva: Optional[float] = None
+    precio_nuevo: Optional[float] = None
+    cantidad_factor: Optional[float] = None
+    precio_factor: Optional[float] = None
+    accion: str
+    actor_user_id: Optional[int] = None
+    actor_username: str = ""
+    changed_at: str
+
 
 class SugerenciaOut(BaseModel):
     itemcode_sap: str
@@ -166,7 +343,18 @@ class ReviewQueueItemOut(BaseModel):
 
 class AnalyticsOut(BaseModel):
     summary: AnalyticsSummaryOut
+    received_by_day: List[AnalyticsDailyPointOut] = []
+    entered_by_day: List[AnalyticsDailyPointOut] = []
+    top_clients: List[AnalyticsRankingItemOut] = []
+    top_buyers: List[AnalyticsRankingItemOut] = []
     queue: List[ReviewQueueItemOut]
+    productividad_hoy: Optional[AnalyticsTodayOut] = None
+    productividad_usuarios: List[AnalyticsUserProductivityOut] = []
+    aging: Optional[AnalyticsAgingOut] = None
+    funnel: List[AnalyticsFunnelItemOut] = []
+    salud_sync: Optional[AnalyticsSyncHealthOut] = None
+    privadas: Optional[AnalyticsPrivateOut] = None
+    top_blockers: List[AnalyticsBlockingProductOut] = []
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
@@ -254,8 +442,34 @@ class EstadoIn(BaseModel):
     estado: str
 
 
+class IngresadaIn(BaseModel):
+    acuerdo_global: bool = False
+
+
+class ResponsableIn(BaseModel):
+    user_id: Optional[int] = None
+
+
+class ResponsableOut(BaseModel):
+    id: int
+    username: str
+    nombre_completo: str = ""
+
+
 class NotasIn(BaseModel):
     notas: str
+
+
+class ImportarOcMpIn(BaseModel):
+    codigo_oc: str
+
+
+class ImportarOcMpOut(BaseModel):
+    ok: bool
+    created: bool
+    codigo_oc: str
+    message: str
+    oc: OrdenCompraOut
 
 
 # ── Sync ─────────────────────────────────────────────────────────────────────
@@ -264,6 +478,7 @@ class SyncMpIn(BaseModel):
     fecha_desde: str   # YYYY-MM-DD
     fecha_hasta: str   # YYYY-MM-DD
     solo_cm: bool = False
+    ruts_filter: Optional[List[str]] = None  # RUTs normalizados (sin DV, sin puntos) para filtrar por cartera
 
 
 class SyncGmailIn(BaseModel):
@@ -316,6 +531,7 @@ class ConfigOut(BaseModel):
     imap_filter_from_configured: bool  # Solo indica si está configurada
     licitaciones_path: str
     sap_columns: List[str]
+    sap_global_columns: List[str]
     oc_list_columns: List[str]
 
 
@@ -346,6 +562,7 @@ class ConfigIn(BaseModel):
     redsalud_homo_path: Optional[str] = None
     licitaciones_path: Optional[str] = None
     sap_columns: Optional[List[str]] = None
+    sap_global_columns: Optional[List[str]] = None
     oc_list_columns: Optional[List[str]] = None
 
 
@@ -382,6 +599,18 @@ class CarteraSearchOut(BaseModel):
     region_nombre: str
     cartera: str
     vendedor: str
+
+
+class CorreoVendedorOut(BaseModel):
+    id: int
+    cartera: str
+    nombre: str
+    email: str
+    activo: bool
+
+
+class CorreoVendedorToggleIn(BaseModel):
+    activo: bool
 
 
 class HoldingRutOut(BaseModel):

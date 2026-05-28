@@ -14,6 +14,13 @@ from app.models.linea_oc import LineaOC
 logger = logging.getLogger(__name__)
 
 
+def _format_decimal(value, decimals: int = 4) -> str:
+    number = float(value or 0)
+    if number == int(number):
+        return str(int(number))
+    return f"{number:.{decimals}f}".rstrip("0").rstrip(".").replace(".", ",")
+
+
 def generar_texto_sap(lineas: List[LineaOC]) -> tuple[str, List[int]]:
     """
     Genera el texto tabulado para SAP desde líneas de detalle.
@@ -36,13 +43,8 @@ def generar_texto_sap(lineas: List[LineaOC]) -> tuple[str, List[int]]:
         cantidad = linea.cantidad_sap if linea.cantidad_sap is not None else linea.cantidad
         precio = linea.precio_sap if linea.precio_sap is not None else linea.precio_neto
 
-        # Formatear cantidad como entero si es entero, decimal si no
-        if cantidad == int(cantidad):
-            cant_str = str(int(cantidad))
-        else:
-            cant_str = f"{cantidad:.4f}".rstrip('0').rstrip('.')
-
-        precio_str = f"{precio:.2f}"
+        cant_str = _format_decimal(cantidad, 4)
+        precio_str = _format_decimal(precio, 4)
 
         fila = f"{itemcode}\t{descripcion}\t{cant_str}\t{precio_str}"
         filas.append(fila)

@@ -6,6 +6,15 @@ import sys
 import os
 from pathlib import Path
 
+# Cargar variables de entorno desde .env (si existe)
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).parent.parent.parent / ".env"
+    if _env_path.exists():
+        load_dotenv(dotenv_path=_env_path, override=False)
+except ImportError:
+    pass  # python-dotenv no instalado: usar variables de entorno del sistema
+
 # Asegurar que nemo_oc/ esté en sys.path para importar app.*
 _nemo_oc_dir = Path(__file__).parent.parent.parent.parent / "nemo_oc"
 if str(_nemo_oc_dir) not in sys.path:
@@ -31,7 +40,7 @@ def initialize():
     setup_logger(config.log_level)
 
     logger.info("=" * 50)
-    logger.info("NemoOC Web iniciando...")
+    logger.info("NEMONKEY iniciando...")
 
     # Base de datos
     from app.db import initialize_db
@@ -76,10 +85,15 @@ def initialize():
     # Email
     try:
         from app.services.email_service import get_email_service
+        svc = get_email_service()
         p = config.correos_path or str(get_default_correos_path())
-        if Path(p).exists():
-            ok, msg = get_email_service().cargar_correos(p)
+        email_count = svc.count()
+        if email_count == 0 and Path(p).exists():
+            ok, msg = svc.cargar_correos(p)
             logger.info(f"EmailService: {msg}")
+        elif email_count > 0:
+            svc.reload()
+            logger.info(f"EmailService: {svc.count()} vendedor(es) cargados desde BD.")
     except Exception as e:
         logger.warning(f"Email: {e}")
 
@@ -125,4 +139,4 @@ def initialize():
     except Exception as e:
         logger.warning(f"Licitaciones: {e}")
 
-    logger.info("NemoOC Web listo.")
+    logger.info("NEMONKEY listo.")

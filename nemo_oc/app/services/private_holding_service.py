@@ -96,14 +96,13 @@ def _sender_domains(senders: Iterable[str]) -> list[str]:
     return domains
 
 
-def detect_holding(pdf_path: str, metadata: Optional[dict] = None) -> HoldingDetection:
-    """
-    Detecta el holding usando principalmente el PDF y, como apoyo, metadatos del email.
-    """
+def _detect_holding_from_sources(
+    raw_text: str,
+    rut_candidates: list[str],
+    metadata: Optional[dict] = None,
+) -> HoldingDetection:
     metadata = metadata or {}
-    raw_text = _extract_pdf_text(pdf_path)
     norm_text = _normalize_text(raw_text)
-    rut_candidates = _extract_ruts(raw_text)
     subject = (metadata.get("subject") or "").lower()
     senders = list(_sender_candidates(metadata))
     sender_domains = _sender_domains(senders)
@@ -195,12 +194,42 @@ def detect_holding(pdf_path: str, metadata: Optional[dict] = None) -> HoldingDet
             confidence=confidence,
             metodo_deteccion=" + ".join(sorted({ev.split(":", 1)[0] for ev in evidence.get(best_id, [])})),
             rut_emisor_norm=rut_candidates[0] if rut_candidates else "",
-            emisor_detectado=emitter_name.get(best_id, ""),
+            emisor_detectado=emitter_name.get(best_id, "") or raw_text.strip(),
             raw_text=raw_text,
             evidence=evidence.get(best_id, []),
         )
     finally:
         conn.close()
+
+
+def detect_holding(pdf_path: str, metadata: Optional[dict] = None) -> HoldingDetection:
+    """
+    Detecta el holding usando principalmente el PDF y, como apoyo, metadatos del email.
+    """
+    raw_text = _extract_pdf_text(pdf_path)
+    rut_candidates = _extract_ruts(raw_text)
+    return _detect_holding_from_sources(raw_text, rut_candidates, metadata)
+
+
+def detect_holding_from_identity(
+    rut_value: str = "",
+    buyer_name: str = "",
+    metadata: Optional[dict] = None,
+) -> HoldingDetection:
+    """
+    Detecta el holding a partir del RUT y/o nombre del comprador, sin requerir PDF.
+    Sirve para normalizar OCs privadas antiguas o flujos como Artikos.
+    """
+    rut_candidates: list[str] = []
+    rut_norm = normalize_rut(rut_value)
+    if rut_norm:
+        rut_candidates.append(rut_norm)
+
+    for extracted in _extract_ruts(buyer_name):
+        if extracted not in rut_candidates:
+            rut_candidates.append(extracted)
+
+    return _detect_holding_from_sources(buyer_name or "", rut_candidates, metadata)
 
 
 def _score_to_confidence(best_score: int, second_score: int) -> float:

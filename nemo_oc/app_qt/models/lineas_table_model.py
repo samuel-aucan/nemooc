@@ -97,23 +97,23 @@ class LineasTableModel(QAbstractTableModel):
             return f"${float(row.total or 0):,.0f}".replace(",", ".")
         if key in {"precio_neto", "precio_sap"}:
             value = getattr(row, key) or 0
-            return f"${float(value):,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+            return f"${float(value):,.4f}".rstrip("0").rstrip(".").replace(",", "_").replace(".", ",").replace("_", ".")
         if key == "cantidad":
             value = float(row.cantidad or 0)
             if value.is_integer():
                 return str(int(value))
-            return f"{value:.2f}"
+            return f"{value:.4f}".rstrip("0").rstrip(".")
         if key == "cantidad_sap":
             value = row.cantidad_sap if row.cantidad_sap is not None else row.cantidad
             value = float(value or 0)
             if value.is_integer():
                 return str(int(value))
-            return f"{value:.2f}"
+            return f"{value:.4f}".rstrip("0").rstrip(".")
         if key == "factor_empaque":
             value = float(row.factor_empaque or 0)
             if value.is_integer():
                 return str(int(value))
-            return f"{value:.2f}"
+            return f"{value:.4f}".rstrip("0").rstrip(".")
         return str(getattr(row, key) or "")
 
     @staticmethod

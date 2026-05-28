@@ -44,7 +44,7 @@ _RE_IVA        = re.compile(r'19%\s*IVA\s+([\d.]+)', re.IGNORECASE)
 _RE_LINEA = re.compile(
     r'^(\d+)\s+(\d{7,9})'        # POS + CÓDIGO (7-9 dígitos)
     r'(.*?)'                      # DESCRIPCIÓN inicial (lazy)
-    r'\s+(\d+)'                   # CANT
+    r'\s+([\d.,]+)'               # CANT
     r'\s+(\w+)'                   # UMB
     r'\s+(\d{2}\.\d{2}\.\d{4})'  # FE.ENTREGA
     r'\s+([\d.]+)'                # PRECIO UNIT (formato CLP: puntos = miles)
@@ -62,7 +62,30 @@ _RE_PROD_START   = re.compile(r'^\d+\s+\d{7,9}')
 
 def _parse_clp(value_str: str) -> float:
     """Convierte string CLP (puntos como miles) a float. '122.500' → 122500.0"""
-    return float(value_str.replace(".", ""))
+    return _parse_number(value_str)
+
+
+def _parse_number(value_str: str) -> float:
+    """
+    Convierte números con separadores locales a float.
+    Soporta cantidades como '2.000' y montos como '1.234,56'.
+    """
+    raw = (value_str or "").strip()
+    if not raw:
+        return 0.0
+
+    if "," in raw and "." in raw:
+        normalized = raw.replace(".", "").replace(",", ".") if raw.rfind(",") > raw.rfind(".") else raw.replace(",", "")
+    elif "," in raw:
+        _, tail = raw.rsplit(",", 1)
+        normalized = raw.replace(",", ".") if len(tail) <= 2 else raw.replace(",", "")
+    elif "." in raw:
+        _, tail = raw.rsplit(".", 1)
+        normalized = raw if len(tail) <= 2 else raw.replace(".", "")
+    else:
+        normalized = raw
+
+    return float(normalized)
 
 
 def _fecha_iso(fecha_str: str) -> str:
@@ -191,7 +214,7 @@ def _parse_lineas(text: str) -> List[Dict]:
         pos         = int(m.group(1))
         codigo      = m.group(2).strip()
         desc_inline = m.group(3).strip()
-        cant        = float(m.group(4))
+        cant        = _parse_number(m.group(4))
         umb         = m.group(5).strip()
         fecha_ent   = _fecha_iso(m.group(6))
         precio_unit = _parse_clp(m.group(7))

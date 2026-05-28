@@ -579,7 +579,7 @@ class OcDetailFrame(ctk.CTkFrame):
 
             cant_oc = f"{linea.cantidad:g}" if linea.cantidad is not None else ""
             cant_sap = f"{linea.cantidad_sap:g}" if linea.cantidad_sap is not None else ""
-            precio_sap = f"${linea.precio_sap:,.2f}" if linea.precio_sap is not None else ""
+            precio_sap = f"${linea.precio_sap:,.4f}".rstrip("0").rstrip(".") if linea.precio_sap is not None else ""
             f_emp = f"{linea.factor_empaque:g}" if linea.factor_empaque else "1"
 
             row_tag = f"homo_{estado}"
@@ -612,7 +612,7 @@ class OcDetailFrame(ctk.CTkFrame):
         """Poblar tabla con datos no-CM (descripciones + SAP si asignado)."""
         for linea in lineas:
             cant = f"{linea.cantidad:g}" if linea.cantidad is not None else ""
-            precio = f"${linea.precio_neto:,.2f}" if linea.precio_neto else ""
+            precio = f"${linea.precio_neto:,.4f}".rstrip("0").rstrip(".") if linea.precio_neto else ""
             total = f"${linea.total:,.0f}" if linea.total else ""
             itemcode = linea.itemcode_sap or ""
             desc_sap = (linea.descripcion_sap or "")[:50]
@@ -922,7 +922,7 @@ class OcDetailFrame(ctk.CTkFrame):
             return f"{v:.4f}".rstrip('0').rstrip('.').replace('.', ',')
 
         def _fmt_precio(v):
-            return f"{v:.2f}".replace('.', ',')
+            return f"{v:.4f}".rstrip('0').rstrip('.').replace('.', ',')
 
         col_extractors = {
             "#":              lambda l: str(l.correlativo),

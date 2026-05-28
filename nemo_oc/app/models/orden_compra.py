@@ -41,6 +41,11 @@ class OrdenCompra:
     cantidad_lineas: int = 0
     estado_interno: str = "Nueva"
     fecha_ingreso: Optional[str] = None
+    responsable_ingreso_user_id: Optional[int] = None
+    responsable_ingreso_username: str = ""
+    ingresado_por_user_id: Optional[int] = None
+    ingresado_por_username: str = ""
+    ingreso_sap_acuerdo_global: bool = False
     notas: Optional[str] = None
     created_at: str = ""
     updated_at: str = ""

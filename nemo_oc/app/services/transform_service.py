@@ -14,6 +14,33 @@ from app.utils.regex_utils import extraer_codigo_mp
 
 logger = logging.getLogger(__name__)
 
+ESTADOS_OC_MP_POR_CODIGO = {
+    0: "Enviada",
+    4: "Enviada a proveedor",
+    5: "En proceso",
+    6: "Aceptada",
+    9: "Cancelada",
+    12: "Recepción Conforme",
+    13: "Pendiente de recepcionar",
+    14: "Recepcionada parcialmente",
+    15: "Recepción conforme incompleta",
+}
+
+
+def resolve_estado_mp(estado_raw: Optional[str], codigo_estado_raw) -> str:
+    """
+    Normaliza el estado de Mercado Publico.
+    La API de lista suele traer solo CodigoEstado, mientras que el detalle trae Estado.
+    """
+    estado = str(estado_raw or "").strip()
+    if estado:
+        return estado
+
+    codigo_estado = _to_int(codigo_estado_raw)
+    if codigo_estado is None:
+        return ""
+    return ESTADOS_OC_MP_POR_CODIGO.get(codigo_estado, "")
+
 
 def parse_cabecera_oc(raw: dict) -> OrdenCompra:
     """
@@ -25,6 +52,7 @@ def parse_cabecera_oc(raw: dict) -> OrdenCompra:
     comprador = raw.get("Comprador", {}) or {}
     proveedor = raw.get("Proveedor", {}) or {}
     items = raw.get("Items", {}) or {}
+    codigo_estado_mp = _to_int(raw.get("CodigoEstado", 0)) or 0
 
     rut_unidad = comprador.get("RutUnidad", "")
     cliente_sap = rut_to_cliente_sap(rut_unidad)
@@ -32,8 +60,8 @@ def parse_cabecera_oc(raw: dict) -> OrdenCompra:
     return OrdenCompra(
         codigo_oc=raw.get("Codigo", ""),
         nombre_oc=raw.get("Nombre", raw.get("Descripcion", "")),
-        codigo_estado_mp=raw.get("CodigoEstado", 0),
-        estado_mp=raw.get("Estado", ""),
+        codigo_estado_mp=codigo_estado_mp,
+        estado_mp=resolve_estado_mp(raw.get("Estado", ""), codigo_estado_mp),
         codigo_tipo=str(raw.get("CodigoTipo", "")),
         tipo_oc=raw.get("Tipo", ""),
         fecha_creacion=_fmt_fecha(fechas.get("FechaCreacion") or raw.get("FechaCreacion")),
@@ -133,14 +161,16 @@ def homologar_lineas(
             linea.descripcion_sap = item.descripcion_sap
             linea.factor_empaque = femp
             linea.cantidad_sap = linea.cantidad * femp
-            linea.precio_sap = round(linea.precio_neto / femp if femp != 0 else linea.precio_neto, 2)
+            linea.precio_sap = round(linea.precio_neto / femp if femp != 0 else linea.precio_neto, 4)
+            linea.sap_values_origen = "auto"
             linea.estado_homologacion = "homologado"
         else:
             linea.itemcode_sap = None
             linea.descripcion_sap = None
             linea.factor_empaque = 1.0
             linea.cantidad_sap = linea.cantidad
-            linea.precio_sap = round(linea.precio_neto, 2)
+            linea.precio_sap = round(linea.precio_neto, 4)
+            linea.sap_values_origen = "auto"
             linea.estado_homologacion = "sin_homologacion"
             sin_homo.append(linea.correlativo)
 
@@ -157,3 +187,12 @@ def _fmt_fecha(raw: Optional[str]) -> str:
         return ""
     # La API devuelve formato "2026-03-17T11:18:49.037" — tomar solo hasta segundos
     return raw[:19] if len(raw) >= 19 else raw
+
+
+def _to_int(value) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

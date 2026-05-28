@@ -1,21 +1,111 @@
 """
-Orquestador de sincronización: descarga OCs desde la API, las transforma,
+Orquestador de sincronizacion: descarga OCs desde la API, las transforma,
 homologa (CM) y persiste. Corre en un thread separado y comunica progreso via Queue.
 """
+
 import logging
 import queue
 import threading
 import time
 from datetime import datetime
-from typing import Callable, Optional
 
-from app.services.mp_api_service import MercadoPublicoAPI, APIError
+from app.repositories import oc_repository
 from app.services import transform_service
 from app.services.homologacion_service import get_homologacion_service
 from app.services.licitaciones_service import get_licitaciones_service
-from app.repositories import oc_repository
+from app.services.mp_api_service import APIError, MercadoPublicoAPI
+from app.services.sap_mode_service import apply_auto_mode_to_line, apply_learned_sap_values_to_line
 
 logger = logging.getLogger(__name__)
+
+
+def _normalizar_rut(valor: str) -> str:
+    """Normaliza RUT a formato sin puntos, sin guión, sin DV (últimos 8 dígitos)."""
+    rut = valor.upper().replace("CN", "", 1) if valor.upper().startswith("CN") else valor
+    rut = rut.replace(".", "").replace("-", "").replace(" ", "")
+    if len(rut) >= 9:
+        rut = rut[:-1]
+    return rut
+
+
+def _preparar_oc_y_lineas(raw_detalle: dict, catalog) -> tuple:
+    oc = transform_service.parse_cabecera_oc(raw_detalle)
+    raw_items = (raw_detalle.get("Items") or {}).get("Listado", [])
+    lineas = transform_service.parse_detalle_oc(raw_items, oc.codigo_oc)
+
+    if oc.tipo_oc == "CM":
+        lineas, sin_homo = transform_service.homologar_lineas(lineas, catalog)
+    else:
+        lics_svc = get_licitaciones_service()
+        for linea in lineas:
+            desc_query = linea.especificacion_comprador or linea.producto
+            sugs = lics_svc.buscar_sugerencias(
+                desc_query,
+                rut_oc=oc.rut_unidad,
+                max_results=1,
+            )
+
+            if sugs and sugs[0].score >= 0.35:
+                linea.itemcode_sap = sugs[0].itemcode_sap
+                linea.descripcion_sap = sugs[0].descripcion_sap
+                linea.estado_homologacion = "asignado_auto"
+            else:
+                linea.estado_homologacion = "manual"
+
+            apply_auto_mode_to_line(linea, oc.tipo_oc)
+        sin_homo = []
+
+    for linea in lineas:
+        apply_learned_sap_values_to_line(linea, oc)
+
+    return oc, lineas, sin_homo
+
+
+def import_single_public_oc(
+    ticket: str,
+    codigo_empresa: str,
+    codigo_oc: str,
+) -> dict:
+    codigo = (codigo_oc or "").strip().upper()
+    if not codigo:
+        raise ValueError("Debe indicar un codigo de OC")
+
+    existente = oc_repository.get_oc(codigo)
+    if existente:
+        return {
+            "ok": True,
+            "created": False,
+            "oc": existente,
+            "lineas": oc_repository.get_lineas(codigo),
+            "message": f"OC {codigo} ya existe en la base local.",
+        }
+
+    api = MercadoPublicoAPI(ticket=ticket, codigo_empresa=codigo_empresa)
+    catalog = get_homologacion_service()
+    raw_detalle = api.obtener_detalle_oc(codigo)
+    oc, lineas, sin_homo = _preparar_oc_y_lineas(raw_detalle, catalog)
+
+    if not oc.codigo_oc:
+        oc.codigo_oc = codigo
+        for linea in lineas:
+            linea.codigo_oc = codigo
+
+    oc_repository.save_oc(oc, lineas)
+
+    try:
+        from backend.supabase_write_service import upsert_oc as _upsert_sb
+        _upsert_sb(oc, lineas)
+    except Exception:
+        pass
+
+    n_homo = len(lineas) - len(sin_homo)
+    return {
+        "ok": True,
+        "created": True,
+        "oc": oc,
+        "lineas": lineas,
+        "message": f"OC {oc.codigo_oc} importada desde Mercado Publico: {len(lineas)} lineas, {n_homo} homologadas.",
+    }
 
 
 def run_sync(
@@ -25,174 +115,161 @@ def run_sync(
     fecha_hasta: datetime,
     progress_queue: queue.Queue,
     solo_cm: bool = False,
-) -> None:
+    ruts_filter: list[str] | None = None,
+) -> dict[str, int | bool]:
     """
-    Función que corre en un thread worker.
+    Funcion que corre en un thread worker.
     Emite mensajes al progress_queue:
-        {"type": "log",      "message": str}
+        {"type": "log", "message": str}
         {"type": "progress", "current": int, "total": int}
-        {"type": "done",     "message": str, "nuevas": int, "errores": int}
-        {"type": "error",    "message": str}
+        {"type": "done", "message": str, "nuevas": int, "errores": int}
+        {"type": "error", "message": str}
     """
+
     def emit(tipo: str, **kwargs):
         progress_queue.put({"type": tipo, **kwargs})
 
-    emit("log", message="Iniciando sincronización con Mercado Público...")
+    emit("log", message="Iniciando sincronizacion con Mercado Publico...")
 
     api = MercadoPublicoAPI(ticket=ticket, codigo_empresa=codigo_empresa)
     catalog = get_homologacion_service()
 
-    # 1. Obtener lista de OCs
     tipo_label = "CM" if solo_cm else "todas"
     try:
         lista_raw = api.obtener_lista_oc(fecha_desde, fecha_hasta, solo_cm=solo_cm)
     except APIError as e:
         emit("error", message=f"Error de API: {e}")
-        return
+        return {"ok": False, "nuevas": 0, "errores": 1}
     except Exception as e:
         emit("error", message=f"Error inesperado obteniendo lista: {e}")
-        return
+        return {"ok": False, "nuevas": 0, "errores": 1}
 
-    total = len(lista_raw)
-    emit("log", message=f"Se encontraron {total} OC(s) ({tipo_label}) en el período.")
-    emit("progress", current=0, total=total)
+    total_encontradas = len(lista_raw)
+    emit("log", message=f"Se encontraron {total_encontradas} OC(s) ({tipo_label}) en el periodo.")
 
-    if total == 0:
+    if ruts_filter:
+        ruts_set = set(ruts_filter)
+        lista_raw = [
+            oc for oc in lista_raw
+            if _normalizar_rut((oc.get("Comprador") or {}).get("RutUnidad", "")) in ruts_set
+        ]
+        emit("log", message=f"Filtro de cartera activo: {len(lista_raw)} OC(s) corresponden a tu cartera.")
+
+    if total_encontradas == 0:
         emit("done", message=f"No hay OCs ({tipo_label}) en el rango seleccionado.", nuevas=0, errores=0)
-        return
+        return {"ok": True, "nuevas": 0, "errores": 0}
 
-    # 2. Pre-cargar códigos existentes para evitar re-descarga innecesaria
     try:
         existentes = oc_repository.get_existing_codes()
     except Exception as e:
         emit("error", message=f"Error accediendo a la base de datos: {e}")
-        return
+        return {"ok": False, "nuevas": 0, "errores": 1}
 
     nuevas = 0
     errores = 0
-    omitidas = 0
 
-    # Contar cuántas ya existen para informar rápido
     nuevas_en_api = [oc for oc in lista_raw if oc.get("Codigo", "") not in existentes]
-    ya_existentes = total - len(nuevas_en_api)
+    ya_existentes = total_encontradas - len(nuevas_en_api)
+
     if ya_existentes:
-        emit("log", message=f"  {ya_existentes} OC(s) ya existen en la base de datos — se omiten.")
+        emit("log", message=f"  {ya_existentes} OC(s) ya existen en la base de datos y se omiten.")
     if not nuevas_en_api:
         emit("log", message="No hay OCs nuevas por descargar.")
         emit("done", message="Sin OCs nuevas.", nuevas=0, errores=0)
-        return
+        return {"ok": True, "nuevas": 0, "errores": 0}
 
-    emit("log", message=f"  {len(nuevas_en_api)} OC(s) nuevas por descargar...")
     total_nuevas = len(nuevas_en_api)
+    emit("log", message=f"  {total_nuevas} OC(s) nuevas por descargar...")
+    emit("progress", current=0, total=total_nuevas)
 
-    for i, oc_summary in enumerate(lista_raw, start=1):
+    for i, oc_summary in enumerate(nuevas_en_api, start=1):
         codigo = oc_summary.get("Codigo", "")
-        emit("progress", current=i, total=total)
+        emit("log", message=f"  [{i}/{total_nuevas}] {codigo}: procesando...")
 
-        if codigo in existentes:
-            omitidas += 1
-            continue
-
-        emit("log", message=f"  [{i}/{total}] {codigo}: procesando...")
-
-        # 3. Usar datos de la lista directamente (ya incluye Items completo)
-        # Si no tiene Items, intentar obtener detalle por separado
         raw_detalle = oc_summary
-        items_data = (oc_summary.get("Items") or {})
+        items_data = oc_summary.get("Items") or {}
         tiene_items = items_data.get("Cantidad", 0) or 0
 
         if not tiene_items or not items_data.get("Listado"):
-            emit("log", message=f"    Sin ítems en lista, consultando detalle...")
-            time.sleep(0.8)  # pausa para respetar rate limit del servidor
+            emit("log", message="    Sin items en lista, consultando detalle...")
+            time.sleep(0.8)
             try:
                 raw_detalle = api.obtener_detalle_oc(codigo)
             except APIError as e:
                 emit("log", message=f"    ERROR detalle: {e}")
                 errores += 1
+                emit("progress", current=i, total=total_nuevas)
                 continue
             except Exception as e:
                 emit("log", message=f"    ERROR inesperado: {e}")
                 errores += 1
+                emit("progress", current=i, total=total_nuevas)
                 continue
 
-        # 4. Transformar
         try:
-            oc = transform_service.parse_cabecera_oc(raw_detalle)
-            raw_items = (raw_detalle.get("Items") or {}).get("Listado", [])
-            lineas = transform_service.parse_detalle_oc(raw_items, oc.codigo_oc)
+            oc, lineas, sin_homo = _preparar_oc_y_lineas(raw_detalle, catalog)
         except Exception as e:
             emit("log", message=f"    ERROR transformando {codigo}: {e}")
             errores += 1
+            emit("progress", current=i, total=total_nuevas)
             continue
 
-        # 5. Homologar
-        if oc.tipo_oc == "CM":
-            lineas, sin_homo = transform_service.homologar_lineas(lineas, catalog)
-        else:
-            lics_svc = get_licitaciones_service()
-            for l in lineas:
-                # Intentar auto-asignar la mejor sugerencia
-                desc_query = l.especificacion_comprador or l.producto
-                sugs = lics_svc.buscar_sugerencias(
-                    desc_query, 
-                    rut_oc=oc.rut_unidad, 
-                    max_results=1
-                )
-                
-                if sugs and sugs[0].score >= 0.35: # Umbral de confianza
-                    l.itemcode_sap = sugs[0].itemcode_sap
-                    l.descripcion_sap = sugs[0].descripcion_sap
-                    l.estado_homologacion = "asignado_auto"
-                else:
-                    l.estado_homologacion = "manual"
-                
-                l.cantidad_sap = l.cantidad
-                l.precio_sap = l.precio_neto
-            sin_homo = []
-
-        # 6. Persistir
         try:
             oc_repository.save_oc(oc, lineas)
             nuevas += 1
             n_homo = len(lineas) - len(sin_homo)
-            msg = f"    OK: {len(lineas)} líneas, {n_homo} homologadas"
+            msg = f"    OK: {len(lineas)} lineas, {n_homo} homologadas"
             if sin_homo:
-                msg += f", {len(sin_homo)} SIN homologación (correlativo: {sin_homo})"
+                msg += f", {len(sin_homo)} SIN homologacion (correlativo: {sin_homo})"
             emit("log", message=msg)
         except Exception as e:
             emit("log", message=f"    ERROR guardando {codigo}: {e}")
             errores += 1
+            emit("progress", current=i, total=total_nuevas)
             continue
 
-        # 7. Notificación email — solo para OCs en estado inicial (no finales)
-        _ESTADOS_FINALES = {
-            "recepción conforme", "recepcion conforme",
-            "cerrada", "cerrado",
-            "cancelada", "cancelado",
+        # Sincronizar en Supabase (silencioso, no interrumpe el flujo)
+        try:
+            from backend.supabase_write_service import upsert_oc as _upsert_sb
+            _upsert_sb(oc, lineas)
+        except Exception:
+            pass
+
+        estados_finales = {
+            "recepcion conforme",
+            "recepci\u00f3n conforme",
+            "cerrada",
+            "cerrado",
+            "cancelada",
+            "cancelado",
         }
-        _estado_lower = (oc.estado_mp or "").strip().lower()
-        if _estado_lower in _ESTADOS_FINALES:
+        estado_lower = (oc.estado_mp or "").strip().lower()
+        if estado_lower in estados_finales:
             emit("log", message=f"    Email omitido: OC en estado final ({oc.estado_mp})")
         else:
             try:
                 from app.config import load_config as _load_cfg
-                from app.services.email_service import get_email_service
                 from app.services.cartera_service import get_cartera_service
-                _cfg = _load_cfg()
-                if _cfg.smtp_enabled:
-                    _cliente = get_cartera_service().lookup(oc.cliente_sap_sugerido)
-                    if _cliente:
-                        get_email_service().enviar_notificacion_oc(oc, _cliente)
-            except Exception as _e:
-                logger.warning(f"Email no enviado para {oc.codigo_oc}: {_e}")
+                from app.services.email_service import get_email_service
+
+                cfg = _load_cfg()
+                if cfg.smtp_enabled:
+                    cliente = get_cartera_service().lookup(oc.cliente_sap_sugerido)
+                    if cliente:
+                        get_email_service().enviar_notificacion_oc(oc, cliente)
+            except Exception as exc:
+                logger.warning(f"Email no enviado para {oc.codigo_oc}: {exc}")
+
+        emit("progress", current=i, total=total_nuevas)
 
     resumen = (
-        f"Sincronización completada. "
+        "Sincronizacion completada. "
         f"Nuevas: {nuevas} | Errores: {errores} | "
-        f"Omitidas (ya existían): {total - nuevas - errores}"
+        f"Omitidas (ya existian): {ya_existentes}"
     )
     emit("log", message=resumen)
     emit("done", message=resumen, nuevas=nuevas, errores=errores)
+    return {"ok": True, "nuevas": nuevas, "errores": errores}
 
 
 def run_sync_light(
@@ -201,87 +278,140 @@ def run_sync_light(
     fecha_desde: datetime,
     fecha_hasta: datetime,
     progress_queue: queue.Queue,
-) -> None:
+) -> dict[str, int | bool]:
     """
-    Sincronización ligera: solo actualiza estado_mp de OCs existentes.
-    NO descarga líneas completas, solo estado.
+    Sincronizacion ligera: solo actualiza estado_mp de OCs existentes.
+    NO descarga lineas completas, solo estado.
     Corre en thread separado.
     """
+
     def emit(tipo: str, **kwargs):
         progress_queue.put({"type": tipo, **kwargs})
 
-    emit("log", message="Iniciando sincronización ligera de estados (Mercado Público)...")
+    emit("log", message="Iniciando sincronizacion ligera de estados (Mercado Publico)...")
 
     api = MercadoPublicoAPI(ticket=ticket, codigo_empresa=codigo_empresa)
 
-    # Obtener lista simple de OCs
     try:
         lista_raw = api.obtener_lista_oc(fecha_desde, fecha_hasta, solo_cm=False)
     except Exception as e:
         emit("error", message=f"Error obteniendo lista: {e}")
-        return
+        return {"ok": False, "nuevas": 0, "errores": 1}
 
     total = len(lista_raw)
-    emit("log", message=f"Se encontraron {total} OC(s) en el período.")
+    emit("log", message=f"Se encontraron {total} OC(s) en el periodo.")
     emit("progress", current=0, total=total)
 
     if total == 0:
         emit("done", message="No hay OCs en el rango seleccionado.", nuevas=0, errores=0)
-        return
+        return {"ok": True, "nuevas": 0, "errores": 0}
 
-    # Obtener códigos existentes
     try:
         existentes = oc_repository.get_existing_codes()
     except Exception as e:
         emit("error", message=f"Error accediendo BD: {e}")
-        return
+        return {"ok": False, "nuevas": 0, "errores": 1}
 
     actualizadas = 0
     errores = 0
 
-    # Actualizar solo estado_mp de OCs existentes
     for idx, raw in enumerate(lista_raw, 1):
         codigo = raw.get("Codigo", "")
         if not codigo:
             continue
 
         if codigo not in existentes:
-            emit("log", message=f"  [{idx}/{total}] {codigo} — omitida (no existe en BD)")
+            emit("log", message=f"  [{idx}/{total}] {codigo} - omitida (no existe en BD)")
             emit("progress", current=idx, total=total)
             continue
 
         try:
-            # En la lista el campo de estado se llama "Nombre" (no "Estado")
-            estado_mp = raw.get("Nombre", "") or raw.get("Estado", "")
-            codigo_estado_mp = raw.get("CodigoEstado", 0)
+            codigo_estado_mp = int(raw.get("CodigoEstado", 0) or 0)
+            estado_mp = transform_service.resolve_estado_mp(
+                raw.get("Estado", ""),
+                codigo_estado_mp,
+            )
 
-            # Actualizar en BD (pequeña operación)
             from app.db import get_connection
+
             conn = get_connection()
             try:
-                conn.execute(
-                    """
-                    UPDATE oc_cabecera
-                    SET estado_mp = ?, codigo_estado_mp = ?, fecha_ultima_modificacion = ?
-                    WHERE codigo_oc = ?
-                    """,
-                    (estado_mp, codigo_estado_mp, datetime.now().isoformat(), codigo),
-                )
+                if estado_mp:
+                    conn.execute(
+                        """
+                        UPDATE oc_cabecera
+                        SET estado_mp = ?, codigo_estado_mp = ?, fecha_ultima_modificacion = ?
+                        WHERE codigo_oc = ?
+                        """,
+                        (estado_mp, codigo_estado_mp, datetime.now().isoformat(), codigo),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE oc_cabecera
+                        SET codigo_estado_mp = ?, fecha_ultima_modificacion = ?
+                        WHERE codigo_oc = ?
+                        """,
+                        (codigo_estado_mp, datetime.now().isoformat(), codigo),
+                    )
                 conn.commit()
                 actualizadas += 1
-                emit("log", message=f"  [{idx}/{total}] {codigo} → {estado_mp} ✓")
+                estado_log = estado_mp or f"codigo {codigo_estado_mp} (sin texto)"
+                emit("log", message=f"  [{idx}/{total}] {codigo} -> {estado_log} OK")
             finally:
                 conn.close()
 
+            # Sincronizar estado en Supabase (silencioso)
+            try:
+                from backend.supabase_write_service import upsert_oc as _upsert_sb
+                oc_obj = oc_repository.get_oc(codigo)
+                if oc_obj:
+                    lineas_obj = oc_repository.get_lineas(codigo)
+                    _upsert_sb(oc_obj, lineas_obj)
+            except Exception:
+                pass
+
         except Exception as e:
-            emit("log", message=f"  [{idx}/{total}] {codigo} — ERROR: {e}")
+            emit("log", message=f"  [{idx}/{total}] {codigo} - ERROR: {e}")
             errores += 1
 
         emit("progress", current=idx, total=total)
 
-    resumen = f"Sincronización ligera completada. Actualizadas: {actualizadas} | Errores: {errores}"
+    resumen = f"Sincronizacion ligera completada. Actualizadas: {actualizadas} | Errores: {errores}"
     emit("log", message=resumen)
     emit("done", message=resumen, nuevas=actualizadas, errores=errores)
+    return {"ok": True, "nuevas": actualizadas, "errores": errores}
+
+
+def refresh_oc_status_from_portal(
+    ticket: str,
+    codigo_empresa: str,
+    codigo_oc: str,
+) -> dict[str, str | int | bool]:
+    """
+    Refresca el estado de portal de una sola OC ya existente.
+    Devuelve el estado resuelto para que la capa web pueda decidir si lo informa.
+    """
+
+    api = MercadoPublicoAPI(ticket=ticket, codigo_empresa=codigo_empresa)
+    raw = api.obtener_detalle_oc(codigo_oc)
+
+    codigo_estado_mp = int(raw.get("CodigoEstado", 0) or 0)
+    estado_mp = transform_service.resolve_estado_mp(
+        raw.get("Estado", ""),
+        codigo_estado_mp,
+    )
+    updated = oc_repository.actualizar_estado_mp_oc(
+        codigo_oc,
+        codigo_estado_mp=codigo_estado_mp,
+        estado_mp=estado_mp,
+    )
+
+    return {
+        "updated": updated,
+        "estado_mp": estado_mp,
+        "codigo_estado_mp": codigo_estado_mp,
+    }
 
 
 def start_sync_thread(
@@ -292,8 +422,9 @@ def start_sync_thread(
     solo_cm: bool = False,
 ) -> queue.Queue:
     """
-    Inicia la sincronización en un thread daemon y retorna la Queue de progreso.
+    Inicia la sincronizacion en un thread daemon y retorna la Queue de progreso.
     """
+
     q: queue.Queue = queue.Queue()
     t = threading.Thread(
         target=run_sync,
@@ -312,8 +443,9 @@ def start_sync_light_thread(
     fecha_hasta: datetime,
 ) -> queue.Queue:
     """
-    Inicia sincronización ligera en thread daemon.
+    Inicia sincronizacion ligera en thread daemon.
     """
+
     q: queue.Queue = queue.Queue()
     t = threading.Thread(
         target=run_sync_light,

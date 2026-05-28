@@ -71,7 +71,7 @@ def download_manual():
 
     # Usar un directorio temporal para el PDF
     out_dir = _nemo_oc_dir
-    pdf_path = out_dir / "Manual_Instalacion_NemoOC.pdf"
+    pdf_path = out_dir / "Manual_Instalacion_NEMONKEY.pdf"
 
     try:
         # Ejecutar el script de generación
@@ -91,5 +91,5 @@ def download_manual():
     return FileResponse(
         path=str(pdf_path),
         media_type="application/pdf",
-        filename="Manual_NemoOC.pdf",
+        filename="Manual_NEMONKEY.pdf",
     )

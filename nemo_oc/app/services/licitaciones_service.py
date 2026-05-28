@@ -390,7 +390,10 @@ class LicitacionesService:
         conn = get_connection()
         now = datetime.now().isoformat()
         try:
-            conn.execute("DELETE FROM licitaciones_ref")
+            conn.execute("""
+                DELETE FROM licitaciones_ref
+                WHERE COALESCE(origen_archivo, '') != '__usuario__'
+            """)
             count = 0
             for ref in refs:
                 conn.execute(

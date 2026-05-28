@@ -6,16 +6,25 @@ Lee Gmail, detecta holding, parsea PDFs, homologa, audita y persiste.
 from __future__ import annotations
 
 import logging
+import os
 import queue
+import re
 import threading
 from datetime import datetime
 
 from app.models.linea_oc import LineaOC
 from app.models.orden_compra import OrdenCompra
 from app.repositories import oc_repository
-from app.services.imap_service import buscar_artikos_emails_gmail, buscar_ocs_gmail, limpiar_temporales
+from app.services.document_snapshot_service import save_html_snapshot
+from app.services.imap_service import (
+    buscar_artikos_emails_gmail,
+    buscar_ocs_gmail,
+    limpiar_temporales,
+    marcar_artikos_email_leido_gmail,
+)
 from app.services.private_holding_service import (
     detect_holding,
+    detect_holding_from_identity,
     lookup_private_catalog,
     parse_private_pdf,
     save_private_audit,
@@ -48,27 +57,111 @@ def run_sync_privado(
             imap_server=imap_server,
             imap_port=imap_port,
             imap_folder=imap_folder,
+            marcar_leidos=False,
         )
     except Exception as e:
         emit("log", message=f"Advertencia: no se pudo buscar emails Artikos: {e}")
         artikos_emails = []
 
     if artikos_emails:
-        from app.services.artikos_scraper import scrape_oc as artikos_scrape
+        from app.config import load_config
+        from app.services.artikos_scraper import scrape_oc_with_metadata as artikos_scrape
         emit("log", message=f"Emails Artikos encontrados: {len(artikos_emails)}")
         existentes_artikos = oc_repository.get_existing_codes()
+        cfg = load_config()
         for meta, url in artikos_emails:
+            codigo_hint = _normalize_private_oc_code(meta.get("codigo_oc_hint", ""))
+            doc_source = oc_repository.get_document_source(codigo_hint) if codigo_hint else None
+            if (
+                codigo_hint
+                and codigo_hint in existentes_artikos
+                and doc_source
+                and (doc_source.get("source_type") or "").strip().lower() == "artikos"
+            ):
+                _mark_artikos_email_as_read(
+                    meta,
+                    smtp_user=smtp_user,
+                    smtp_password=smtp_password,
+                    imap_server=imap_server,
+                    imap_port=imap_port,
+                    imap_folder=imap_folder,
+                )
+                emit("log", message=f"  Artikos {codigo_hint} ya estaba procesada, omitida")
+                continue
+
             try:
-                oc, lineas = artikos_scrape(url)
+                oc, lineas, scrape_meta = artikos_scrape(
+                    url,
+                    rut_proveedor=cfg.rut_proveedor,
+                    codigo_empresa=cfg.codigo_empresa,
+                )
             except Exception as e:
                 emit("log", message=f"  ERROR scraping Artikos ({meta.get('subject','')}): {e}")
                 continue
+
+            detection = detect_holding_from_identity(
+                rut_value=oc.rut_unidad,
+                buyer_name=oc.nombre_organismo,
+                metadata=meta,
+            )
+            if detection.resolved:
+                oc.codigo_organismo = detection.holding_id
+                oc.codigo_tipo = detection.holding_id.upper()
+
+            snapshot_meta = save_html_snapshot("artikos", oc.codigo_oc, scrape_meta.get("html", ""))
+            access_payload = {
+                "credential_kind": scrape_meta.get("credential_kind", ""),
+                "credential_preview": scrape_meta.get("credential_preview", ""),
+                "credential_attempts": scrape_meta.get("credential_attempts", []),
+                "hidden_fields": scrape_meta.get("hidden_fields", []),
+                "print_available": bool(scrape_meta.get("print_available")),
+            }
+
             if oc.codigo_oc in existentes_artikos:
-                emit("log", message=f"  Artikos {oc.codigo_oc} ya existe en BD, omitida")
+                try:
+                    oc_repository.upsert_document_source(
+                        oc.codigo_oc,
+                        source_type="artikos",
+                        source_locator=url,
+                        access_payload=access_payload,
+                        document_available=True,
+                        document_regenerable=True,
+                        last_verified_at=scrape_meta.get("verified_at", ""),
+                        **snapshot_meta,
+                    )
+                    _mark_artikos_email_as_read(
+                        meta,
+                        smtp_user=smtp_user,
+                        smtp_password=smtp_password,
+                        imap_server=imap_server,
+                        imap_port=imap_port,
+                        imap_folder=imap_folder,
+                    )
+                    emit("log", message=f"  Artikos {oc.codigo_oc} ya existe en BD, respaldo actualizado")
+                except Exception as e:
+                    emit("log", message=f"  ERROR actualizando respaldo Artikos {oc.codigo_oc}: {e}")
                 continue
             try:
                 oc_repository.save_oc(oc, lineas)
+                oc_repository.upsert_document_source(
+                    oc.codigo_oc,
+                    source_type="artikos",
+                    source_locator=url,
+                    access_payload=access_payload,
+                    document_available=True,
+                    document_regenerable=True,
+                    last_verified_at=scrape_meta.get("verified_at", ""),
+                    **snapshot_meta,
+                )
                 existentes_artikos.add(oc.codigo_oc)
+                _mark_artikos_email_as_read(
+                    meta,
+                    smtp_user=smtp_user,
+                    smtp_password=smtp_password,
+                    imap_server=imap_server,
+                    imap_port=imap_port,
+                    imap_folder=imap_folder,
+                )
                 emit("log", message=f"  OK Artikos: OC {oc.codigo_oc} — {oc.nombre_organismo} ({len(lineas)} líneas)")
             except Exception as e:
                 emit("log", message=f"  ERROR guardando Artikos {oc.codigo_oc}: {e}")
@@ -124,6 +217,7 @@ def run_sync_privado(
                 continue
 
             _save_pending_unknown_oc(codigo_oc, metadata, detection, pdf_path)
+            _upsert_imap_document_source(codigo_oc, metadata, pdf_path)
             save_private_audit(
                 codigo_oc=codigo_oc,
                 detection=detection,
@@ -149,7 +243,7 @@ def run_sync_privado(
             errores += 1
             continue
 
-        codigo_oc = f"{detection.prefijo}-{num_oc}"
+        codigo_oc = _normalize_private_oc_code(num_oc)
         emit("log", message=f"  [{i}/{total}] {codigo_oc} - {detection.holding_nombre} ({detection.confidence:.2f})")
 
         if codigo_oc in existentes:
@@ -200,6 +294,7 @@ def run_sync_privado(
 
         try:
             oc_repository.save_oc(oc, lineas)
+            _upsert_imap_document_source(codigo_oc, metadata, pdf_path)
             save_private_audit(
                 codigo_oc=codigo_oc,
                 detection=detection,
@@ -296,7 +391,7 @@ def _build_lineas(
             total=raw.get("valor_total", 0.0),
             factor_empaque=1.0,
             cantidad_sap=raw.get("cantidad", 1.0),
-            precio_sap=round(float(precio_pdf or 0), 2),
+            precio_sap=round(float(precio_pdf or 0), 4),
             itemcode_sap=itemcode,
             descripcion_sap=desc_sap,
             estado_homologacion=estado_homo,
@@ -305,6 +400,34 @@ def _build_lineas(
         ))
 
     return lineas, sin_homo, price_warnings
+
+
+def _normalize_private_oc_code(raw_code: str) -> str:
+    code = (raw_code or "").strip()
+    digits = re.sub(r"\D+", "", code)
+    return digits or code
+
+
+def _mark_artikos_email_as_read(
+    metadata: dict,
+    *,
+    smtp_user: str,
+    smtp_password: str,
+    imap_server: str,
+    imap_port: int,
+    imap_folder: str,
+) -> bool:
+    imap_uid = str(metadata.get("imap_uid") or "").strip()
+    if not imap_uid:
+        return False
+    return marcar_artikos_email_leido_gmail(
+        smtp_user=smtp_user,
+        smtp_password=smtp_password,
+        imap_uid=imap_uid,
+        imap_server=imap_server,
+        imap_port=imap_port,
+        imap_folder=imap_folder,
+    )
 
 
 def _build_private_notes(detection, cabecera: dict, price_warnings: list[str], sin_homo: list[int]) -> str:
@@ -362,6 +485,48 @@ def _save_pending_unknown_oc(codigo_oc: str, metadata: dict, detection, pdf_path
         updated_at=now,
     )
     oc_repository.save_oc(oc, [])
+
+
+def _upsert_imap_document_source(codigo_oc: str, metadata: dict, pdf_path: str) -> None:
+    attachment_filename = (metadata.get("attachment_filename") or "orden_compra.pdf").strip()
+    imap_folder = (metadata.get("imap_folder") or "INBOX").strip()
+    imap_uid = str(metadata.get("imap_uid") or "").strip()
+    message_id = str(metadata.get("message_id") or "").strip()
+    attachment_index = int(metadata.get("attachment_index") or 1)
+    attachment_sha256 = str(metadata.get("attachment_sha256") or "").strip()
+    attachment_size = int(metadata.get("attachment_size_bytes") or 0)
+    if not attachment_size and pdf_path and os.path.exists(pdf_path):
+        try:
+            attachment_size = os.path.getsize(pdf_path)
+        except Exception:
+            attachment_size = 0
+
+    source_locator = f"imap://{imap_folder}/{imap_uid or message_id}/{attachment_filename}"
+    access_payload = {
+        "imap_uid": imap_uid,
+        "message_id": message_id,
+        "imap_folder": imap_folder,
+        "attachment_filename": attachment_filename,
+        "attachment_index": attachment_index,
+        "attachment_sha256": attachment_sha256,
+        "attachment_size_bytes": attachment_size,
+        "email_subject": metadata.get("subject", ""),
+        "email_date": metadata.get("date", ""),
+        "email_from": metadata.get("forwarded_from") or metadata.get("from_addr") or "",
+    }
+    oc_repository.upsert_document_source(
+        codigo_oc,
+        source_type="imap_attachment",
+        source_locator=source_locator,
+        access_payload=access_payload,
+        snapshot_type="",
+        snapshot_path="",
+        snapshot_sha256=attachment_sha256,
+        snapshot_size_bytes=attachment_size,
+        document_available=True,
+        document_regenerable=True,
+        last_verified_at=datetime.now().isoformat(),
+    )
 
 
 def start_sync_privado_thread(

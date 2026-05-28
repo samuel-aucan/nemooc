@@ -16,6 +16,7 @@ class ConfigFrame(ctk.CTkFrame):
     def __init__(self, master, app_state, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.app_state = app_state
+        self._correo_vendor_vars = {}
         self._build()
 
     def _build(self):
@@ -185,6 +186,21 @@ class ConfigFrame(ctk.CTkFrame):
         self.lbl_smtp_status = ctk.CTkLabel(smtp_btn_frame, text="", font=ctk.CTkFont(size=12))
         self.lbl_smtp_status.pack(side="left")
 
+        ctk.CTkLabel(email_frame, text="Switch por vendedor:", anchor="w").grid(
+            row=6, column=0, columnspan=4, padx=12, pady=(0, 6), sticky="w"
+        )
+        self.frame_vendedores_correo = ctk.CTkScrollableFrame(email_frame, height=180, fg_color="gray18")
+        self.frame_vendedores_correo.grid(row=7, column=0, columnspan=4, padx=12, pady=(0, 6), sticky="ew")
+        self.frame_vendedores_correo.grid_columnconfigure(0, weight=1)
+        self.lbl_vendedores_correo_status = ctk.CTkLabel(
+            email_frame,
+            text="",
+            anchor="w",
+            text_color="gray",
+            font=ctk.CTkFont(size=11),
+        )
+        self.lbl_vendedores_correo_status.grid(row=8, column=0, columnspan=4, padx=12, pady=(0, 4), sticky="w")
+
         # ── Sección OCs Privadas (IMAP) ──────────────────────────────────
         self._section(scroll, "OCs Privadas — Búsqueda en Gmail (IMAP)")
         imap_frame = ctk.CTkFrame(scroll)
@@ -293,6 +309,7 @@ class ConfigFrame(ctk.CTkFrame):
 
         self.opt_theme.set(cfg.theme)
         self._actualizar_stats()
+        self._renderizar_vendedores_correos()
 
     def _actualizar_status_archivo(self, path: str, lbl):
         from pathlib import Path
@@ -538,10 +555,100 @@ class ConfigFrame(ctk.CTkFrame):
     def _on_correos_done(self, ok: bool, msg: str, path: str):
         self.btn_import_correos.configure(state="normal", text="Actualizar")
         self._actualizar_status_archivo(path, self.lbl_correos_status)
+        self._renderizar_vendedores_correos()
         if ok:
             messagebox.showinfo("Correos Vendedores", msg)
         else:
             messagebox.showerror("Correos Vendedores", f"Error: {msg}")
+
+    def _renderizar_vendedores_correos(self):
+        if not hasattr(self, "frame_vendedores_correo"):
+            return
+
+        for child in self.frame_vendedores_correo.winfo_children():
+            child.destroy()
+
+        self._correo_vendor_vars = {}
+
+        try:
+            from app.services.email_service import get_email_service
+
+            items = get_email_service().listar_vendedores()
+        except Exception as e:
+            self.lbl_vendedores_correo_status.configure(
+                text=f"No se pudo cargar vendedores: {e}",
+                text_color="red",
+            )
+            return
+
+        if not items:
+            ctk.CTkLabel(
+                self.frame_vendedores_correo,
+                text="No hay vendedores cargados aun. Importa CORREOS.xlsx para habilitar switches.",
+                text_color="gray",
+                wraplength=620,
+                justify="left",
+            ).pack(fill="x", padx=8, pady=10)
+            self.lbl_vendedores_correo_status.configure(text="", text_color="gray")
+            return
+
+        activos = sum(1 for item in items if item["activo"])
+        self.lbl_vendedores_correo_status.configure(
+            text=f"{activos}/{len(items)} vendedor(es) activos para notificaciones.",
+            text_color="gray",
+        )
+
+        for item in items:
+            row = ctk.CTkFrame(self.frame_vendedores_correo, fg_color="gray20")
+            row.pack(fill="x", padx=4, pady=4)
+            row.grid_columnconfigure(0, weight=1)
+
+            titulo = item["nombre"] or item["email"]
+            subtitulo = f"{item['cartera']} | {item['email']}"
+
+            text_frame = ctk.CTkFrame(row, fg_color="transparent")
+            text_frame.grid(row=0, column=0, padx=12, pady=8, sticky="ew")
+            ctk.CTkLabel(
+                text_frame,
+                text=titulo,
+                anchor="w",
+                font=ctk.CTkFont(size=12, weight="bold"),
+            ).pack(fill="x")
+            ctk.CTkLabel(
+                text_frame,
+                text=subtitulo,
+                anchor="w",
+                text_color="gray",
+                font=ctk.CTkFont(size=11),
+            ).pack(fill="x", pady=(2, 0))
+
+            var = tk.BooleanVar(value=bool(item["activo"]))
+            self._correo_vendor_vars[item["id"]] = var
+            ctk.CTkSwitch(
+                row,
+                text="Activo",
+                variable=var,
+                command=lambda vid=item["id"], v=var: self._toggle_vendedor_correo(vid, v),
+            ).grid(row=0, column=1, padx=12, pady=8, sticky="e")
+
+    def _toggle_vendedor_correo(self, vendedor_id: int, var: tk.BooleanVar):
+        nuevo_valor = bool(var.get())
+        try:
+            from app.services.email_service import get_email_service
+
+            ok, msg = get_email_service().actualizar_vendedor_activo(vendedor_id, nuevo_valor)
+            if ok:
+                self._renderizar_vendedores_correos()
+                self.lbl_vendedores_correo_status.configure(text=msg, text_color="green")
+            else:
+                var.set(not nuevo_valor)
+                self.lbl_vendedores_correo_status.configure(text=msg, text_color="red")
+        except Exception as e:
+            var.set(not nuevo_valor)
+            self.lbl_vendedores_correo_status.configure(
+                text=f"No se pudo actualizar el vendedor: {e}",
+                text_color="red",
+            )
 
     def _guardar_smtp(self):
         cfg = self.app_state.config

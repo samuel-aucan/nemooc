@@ -98,10 +98,15 @@ def main():
     try:
         from app.services.email_service import get_email_service
         from app.config import get_default_correos_path
+        email_svc = get_email_service()
         _correos_path = config.correos_path or str(get_default_correos_path())
-        if Path(_correos_path).exists():
-            ok, msg = get_email_service().cargar_correos(_correos_path)
+        email_count = email_svc.count()
+        if email_count == 0 and Path(_correos_path).exists():
+            ok, msg = email_svc.cargar_correos(_correos_path)
             logger.info(f"EmailService: {msg}")
+        elif email_count > 0:
+            email_svc.reload()
+            logger.info(f"EmailService: {email_svc.count()} vendedor(es) cargados desde BD.")
         else:
             logger.info("EmailService: CORREOS.xlsx no encontrado — notificaciones inactivas")
     except Exception as e:
@@ -159,6 +164,15 @@ def main():
     except Exception as e:
         logger.warning(f"No se pudo pre-cargar licitaciones: {e}")
 
+    scheduler_started = False
+    try:
+        from app.services.notification_scheduler_service import start_notification_scheduler
+
+        start_notification_scheduler()
+        scheduler_started = True
+    except Exception as e:
+        logger.warning(f"No se pudo iniciar scheduler de notificaciones: {e}")
+
     # 6. Lanzar interfaz
     try:
         from app.ui.app_window import AppWindow
@@ -167,6 +181,14 @@ def main():
     except Exception as e:
         logger.exception(f"Error fatal en la UI: {e}")
         raise
+    finally:
+        if scheduler_started:
+            try:
+                from app.services.notification_scheduler_service import stop_notification_scheduler
+
+                stop_notification_scheduler()
+            except Exception as e:
+                logger.warning(f"No se pudo detener scheduler de notificaciones: {e}")
 
 
 if __name__ == "__main__":

@@ -113,7 +113,7 @@ class AppConfigSchema(BaseModel):
     color_theme: str = "blue"
     auto_sync: bool = False
     auto_sync_days: int = 7
-    auto_sync_interval: int = 15
+    auto_sync_interval: int = 5
     last_sync: str = ""
     log_level: str = "INFO"
     smtp_host: str = "smtp.office365.com"
@@ -121,6 +121,7 @@ class AppConfigSchema(BaseModel):
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_enabled: bool = False
+    notification_cc_email: str = "samuel.belmar@nemochile.cl"
     redsalud_homo_path: str = ""
     imap_server: str = "imap.gmail.com"
     imap_port: int = 993
@@ -128,7 +129,8 @@ class AppConfigSchema(BaseModel):
     imap_filter_from: str = "ordenesdecompra@nemochile.cl"
     licitaciones_path: str = ""
     sap_columns: list[str] = ["itemcode", "vta", "cantidad_sap", "precio_sap"]
-    oc_list_columns: list[str] = ["codigo_oc", "vta", "tipo_oc", "estado_mp", "estado_interno", "fecha_envio", "nombre_organismo", "cliente_sap_sugerido", "cartera", "total", "cantidad_lineas"]
+    sap_global_columns: list[str] = ["itemcode", "vta", "cantidad_sap", "precio_sap"]
+    oc_list_columns: list[str] = ["codigo_oc", "tipo_oc", "estado_mp", "estado_interno", "fecha_envio", "nombre_organismo", "cliente_sap_sugerido", "cartera", "vendedor", "total", "cantidad_lineas"]
 
     @field_validator("smtp_port", "imap_port", "auto_sync_days", "auto_sync_interval")
     @classmethod
@@ -155,7 +157,7 @@ class AppConfig:
     color_theme: str = "blue"
     auto_sync: bool = False
     auto_sync_days: int = 7
-    auto_sync_interval: int = 15
+    auto_sync_interval: int = 5
     last_sync: str = ""
     log_level: str = "INFO"
     smtp_host: str = "smtp.office365.com"
@@ -163,6 +165,7 @@ class AppConfig:
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_enabled: bool = False
+    notification_cc_email: str = "samuel.belmar@nemochile.cl"
     redsalud_homo_path: str = ""
     imap_server: str = "imap.gmail.com"
     imap_port: int = 993
@@ -170,6 +173,7 @@ class AppConfig:
     imap_filter_from: str = "ordenesdecompra@nemochile.cl"
     licitaciones_path: str = ""
     sap_columns: list[str] = field(default_factory=lambda: ["itemcode", "vta", "cantidad_sap", "precio_sap"])
+    sap_global_columns: list[str] = field(default_factory=lambda: ["itemcode", "vta", "cantidad_sap", "precio_sap"])
     oc_list_columns: list[str] = field(default_factory=lambda: [
         "codigo_oc",
         "vta",
@@ -180,6 +184,7 @@ class AppConfig:
         "nombre_organismo",
         "cliente_sap_sugerido",
         "cartera",
+        "vendedor",
         "total",
         "cantidad_lineas",
     ])
@@ -203,18 +208,49 @@ def _load_config_file(path: Path) -> AppConfig:
     return _config_from_dict(data)
 
 
+def _resolve_portable_catalog_path(saved_path: str, default_path: Path) -> str:
+    raw_path = (saved_path or "").strip()
+    default_path = default_path.resolve()
+
+    if raw_path:
+        candidate = Path(raw_path).expanduser()
+        if candidate.exists():
+            return str(candidate)
+
+        relative_candidate = (get_base_dir() / raw_path).resolve()
+        if relative_candidate.exists():
+            return str(relative_candidate)
+
+        if candidate.name and candidate.name.casefold() == default_path.name.casefold() and default_path.exists():
+            return str(default_path)
+
+    if default_path.exists():
+        return str(default_path)
+    return raw_path
+
+
+def _normalize_portable_catalog_paths(cfg: AppConfig) -> AppConfig:
+    cfg.homologacion_path = _resolve_portable_catalog_path(cfg.homologacion_path, get_default_homo_path())
+    cfg.maestra_path = _resolve_portable_catalog_path(cfg.maestra_path, get_default_maestra_path())
+    cfg.cartera_path = _resolve_portable_catalog_path(cfg.cartera_path, get_default_cartera_path())
+    cfg.correos_path = _resolve_portable_catalog_path(cfg.correos_path, get_default_correos_path())
+    cfg.redsalud_homo_path = _resolve_portable_catalog_path(cfg.redsalud_homo_path, get_default_redsalud_homo_path())
+    cfg.licitaciones_path = _resolve_portable_catalog_path(cfg.licitaciones_path, get_default_licitaciones_path())
+    return cfg
+
+
 def load_config() -> AppConfig:
     try:
         if SETTINGS_FILE.exists():
-            return _load_config_file(SETTINGS_FILE)
+            return _normalize_portable_catalog_paths(_load_config_file(SETTINGS_FILE))
         if DEFAULT_SETTINGS_FILE.exists():
-            cfg = _load_config_file(DEFAULT_SETTINGS_FILE)
+            cfg = _normalize_portable_catalog_paths(_load_config_file(DEFAULT_SETTINGS_FILE))
             save_config(cfg)
             logger.info(f"Configuracion inicial creada desde plantilla: {DEFAULT_SETTINGS_FILE}")
             return cfg
     except Exception as e:
         logger.warning(f"No se pudo cargar configuración: {e}")
-    return AppConfig()
+    return _normalize_portable_catalog_paths(AppConfig())
 
 
 def save_config(cfg: AppConfig) -> None:

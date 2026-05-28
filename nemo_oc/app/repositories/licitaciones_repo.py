@@ -6,9 +6,11 @@ DISEÑO INTENCIONAL:
   El scoring de similitud real (Jaccard ponderado) ocurre en licitaciones_service.py.
   Separar recuperación de scoring evita que el SQL descarte candidatos buenos.
 """
-from typing import List
+from datetime import datetime
 from typing import List, Optional
 from app.db import get_connection
+
+USER_LEARNING_ORIGIN = "__usuario__"
 
 
 def upsert_from_assignment(
@@ -32,25 +34,45 @@ def upsert_from_assignment(
         return
 
     conn = get_connection()
+    now = datetime.now().isoformat()
     try:
         existing = conn.execute("""
             SELECT id FROM licitaciones_ref
             WHERE descripcion_norm = ? AND rut_comprador = ? AND itemcode_sap = ?
-        """, (desc_norm, rut_comprador or "", itemcode_sap)).fetchone()
+              AND COALESCE(origen_archivo, '') = ?
+        """, (desc_norm, rut_comprador or "", itemcode_sap, USER_LEARNING_ORIGIN)).fetchone()
 
         if existing:
             conn.execute("""
-                UPDATE licitaciones_ref SET frecuencia = frecuencia + 1
+                UPDATE licitaciones_ref
+                SET frecuencia = frecuencia + 1,
+                    descripcion_comprador = ?,
+                    descripcion_nemo = ?,
+                    updated_at = ?
                 WHERE id = ?
-            """, (existing["id"],))
+            """, (
+                descripcion_comprador,
+                descripcion_nemo or descripcion_comprador,
+                now,
+                existing["id"],
+            ))
         else:
             conn.execute("""
                 INSERT INTO licitaciones_ref
                     (descripcion_comprador, descripcion_nemo, descripcion_norm,
-                     itemcode_sap, rut_comprador, frecuencia)
-                VALUES (?, ?, ?, ?, ?, 1)
-            """, (descripcion_comprador, descripcion_nemo or descripcion_comprador,
-                  desc_norm, itemcode_sap, rut_comprador or ""))
+                     itemcode_sap, rut_comprador, frecuencia, origen_archivo,
+                     created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+            """, (
+                descripcion_comprador,
+                descripcion_nemo or descripcion_comprador,
+                desc_norm,
+                itemcode_sap,
+                rut_comprador or "",
+                USER_LEARNING_ORIGIN,
+                now,
+                now,
+            ))
         conn.commit()
     finally:
         conn.close()
@@ -75,14 +97,19 @@ def get_exact_candidates(desc_norm: str, rut: str) -> List[dict]:
     try:
         sql = """
             SELECT itemcode_sap, descripcion_nemo, descripcion_comprador,
-                   frecuencia, producto_code_old, descripcion_norm
+                   frecuencia, producto_code_old, descripcion_norm, origen_archivo
             FROM licitaciones_ref
             WHERE descripcion_norm = ? AND rut_comprador = ?
               AND itemcode_sap IS NOT NULL AND itemcode_sap != ''
-            ORDER BY frecuencia DESC
+            ORDER BY
+                CASE
+                    WHEN COALESCE(origen_archivo, '') = ? THEN 0
+                    ELSE 1
+                END,
+                frecuencia DESC
             LIMIT 5
         """
-        rows = conn.execute(sql, (desc_norm, rut)).fetchall()
+        rows = conn.execute(sql, (desc_norm, rut, USER_LEARNING_ORIGIN)).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -117,14 +144,20 @@ def get_candidates(tokens: List[str], limit: int = 80, rut: Optional[str] = None
 
         sql = f"""
             SELECT itemcode_sap, descripcion_nemo, descripcion_comprador,
-                   frecuencia, producto_code_old, descripcion_norm
+                   frecuencia, producto_code_old, descripcion_norm, origen_archivo
             FROM licitaciones_ref
             WHERE ({where_or})
               {rut_clause}
               AND itemcode_sap IS NOT NULL AND itemcode_sap != ''
-            ORDER BY frecuencia DESC
+            ORDER BY
+                CASE
+                    WHEN COALESCE(origen_archivo, '') = ? THEN 0
+                    ELSE 1
+                END,
+                frecuencia DESC
             LIMIT ?
         """
+        params.append(USER_LEARNING_ORIGIN)
         params.append(limit)
         rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]

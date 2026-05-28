@@ -1,12 +1,9 @@
 """
 Dependency injection: expone los singletons de servicios existentes.
 """
-import sys
-from pathlib import Path
+from backend.core.paths import ensure_nemo_oc_in_path
 
-_nemo_oc_dir = Path(__file__).parent.parent.parent.parent / "nemo_oc"
-if str(_nemo_oc_dir) not in sys.path:
-    sys.path.insert(0, str(_nemo_oc_dir))
+ensure_nemo_oc_in_path()
 
 
 def get_homologacion_service():

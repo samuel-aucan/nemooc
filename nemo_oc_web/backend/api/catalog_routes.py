@@ -30,7 +30,14 @@ from app.repositories.homologacion_repo import count_homologacion
 from app.repositories.cartera_repo import count_cartera
 from app.repositories.maestra_repo import count_maestra
 from app.repositories.licitaciones_repo import count_licitaciones
-from .schemas import CatalogStatsOut, CatalogImportOut, PrivateHoldingCatalogOut, CarteraSearchOut
+from .schemas import (
+    CatalogStatsOut,
+    CatalogImportOut,
+    PrivateHoldingCatalogOut,
+    CarteraSearchOut,
+    CorreoVendedorOut,
+    CorreoVendedorToggleIn,
+)
 
 router = APIRouter(prefix="/api/v1/catalogs", tags=["catalogs"])
 
@@ -158,6 +165,44 @@ async def upload_correos(file: UploadFile = File(...)):
     return CatalogImportOut(imported=1 if ok else 0, errors=[] if ok else [msg])
 
 
+@router.get("/correos", response_model=list[CorreoVendedorOut])
+def list_correos():
+    from app.services.email_service import get_email_service
+
+    return [
+        CorreoVendedorOut(
+            id=item["id"],
+            cartera=item["cartera"],
+            nombre=item["nombre"],
+            email=item["email"],
+            activo=bool(item["activo"]),
+        )
+        for item in get_email_service().listar_vendedores()
+    ]
+
+
+@router.patch("/correos/{vendedor_id}", response_model=CorreoVendedorOut)
+def update_correo(vendedor_id: int, body: CorreoVendedorToggleIn):
+    from app.services.email_service import get_email_service
+
+    svc = get_email_service()
+    ok, msg = svc.actualizar_vendedor_activo(vendedor_id, body.activo)
+    if not ok:
+        raise HTTPException(404, detail=msg)
+
+    item = svc.obtener_vendedor(vendedor_id)
+    if not item:
+        raise HTTPException(404, detail="Vendedor no encontrado")
+
+    return CorreoVendedorOut(
+        id=item["id"],
+        cartera=item["cartera"],
+        nombre=item["nombre"],
+        email=item["email"],
+        activo=bool(item["activo"]),
+    )
+
+
 @router.post("/redsalud", response_model=CatalogImportOut)
 async def upload_redsalud(file: UploadFile = File(...)):
     dest = _save_upload(file, REDSALUD_HOMO_FILENAME)
@@ -218,8 +263,8 @@ _CATALOG_TEMPLATES: dict[str, dict] = {
     },
     "correos": {
         "filename": "plantilla_correos.xlsx",
-        "columns": ["email", "nombre", "holding", "activo"],
-        "example": ["oc@hospital.cl", "Hospital Ejemplo", "redsalud", "si"],
+        "columns": ["cartera", "nombre", "correo", "activo"],
+        "example": ["ATEL", "Paola", "paola.caceres@nemochile.cl", "si"],
     },
     "redsalud": {
         "filename": "plantilla_homo_redsalud.xlsx",
@@ -323,7 +368,7 @@ def export_aprendizaje():
     return StreamingResponse(
         buffer,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=\"aprendizaje_nemooc.xlsx\""},
+        headers={"Content-Disposition": "attachment; filename=\"aprendizaje_nemonkey.xlsx\""},
     )
 
 

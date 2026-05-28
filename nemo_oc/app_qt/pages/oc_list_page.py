@@ -879,7 +879,7 @@ class OcListPage(QWidget):
         numeric = float(value or 0)
         if numeric.is_integer():
             return str(int(numeric))
-        return f"{numeric:.2f}"
+        return f"{numeric:.4f}".rstrip("0").rstrip(".")
 
     @staticmethod
     def _make_value_label(text: str) -> QLabel:
@@ -1175,7 +1175,7 @@ class OcListPage(QWidget):
             return f"{number:.4f}".rstrip("0").rstrip(".").replace(".", ",")
 
         def _fmt_precio(value: float | int | None) -> str:
-            return f"{float(value or 0):.2f}".replace(".", ",")
+            return f"{float(value or 0):.4f}".rstrip("0").rstrip(".").replace(".", ",")
 
         extractors = {
             "correlativo": lambda l: str(l.correlativo),

@@ -7,6 +7,9 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from fastapi import HTTPException, Request
+from backend.core.paths import ensure_nemo_oc_in_path
+
+ensure_nemo_oc_in_path()
 
 from app.config import get_data_dir, load_config
 from app.db import get_connection

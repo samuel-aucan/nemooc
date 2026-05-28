@@ -11,7 +11,7 @@
   "color_theme": "cyan",
   "auto_sync": false,
   "auto_sync_days": 7,
-  "auto_sync_interval": 15,
+  "auto_sync_interval": 5,
   "last_sync": "",
   "log_level": "INFO",
   "smtp_host": "smtp.gmail.com",
@@ -33,7 +33,6 @@
   ],
   "oc_list_columns": [
     "codigo_oc",
-    "vta",
     "tipo_oc",
     "estado_mp",
     "estado_interno",
@@ -41,6 +40,7 @@
     "nombre_organismo",
     "cliente_sap_sugerido",
     "cartera",
+    "vendedor",
     "total",
     "cantidad_lineas"
   ]

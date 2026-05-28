@@ -4,6 +4,7 @@ Inicializa el schema, aplica migraciones y provee conexiones con WAL mode.
 """
 
 import logging
+import re
 import sqlite3
 from pathlib import Path
 
@@ -57,6 +58,43 @@ def initialize_db() -> None:
         conn.close()
 
 
+def get_runtime_config(config_key: str, default: str = "") -> str:
+    """Lee un valor runtime desde app_config."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT config_value FROM app_config WHERE config_key = ?",
+            (config_key,),
+        ).fetchone()
+        if not row:
+            return default
+        return row["config_value"] or default
+    finally:
+        conn.close()
+
+
+def set_runtime_config(config_key: str, config_value: str) -> None:
+    """Guarda un valor runtime en app_config."""
+    from datetime import datetime
+
+    conn = get_connection()
+    now = datetime.now().isoformat()
+    try:
+        conn.execute(
+            """
+            INSERT INTO app_config (config_key, config_value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(config_key) DO UPDATE SET
+                config_value = excluded.config_value,
+                updated_at = excluded.updated_at
+            """,
+            (config_key, config_value, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _create_tables(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS schema_version (
@@ -106,10 +144,31 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             cantidad_lineas           INTEGER,
             estado_interno            TEXT DEFAULT 'Nueva',
             fecha_ingreso             TEXT,
+            responsable_ingreso_user_id INTEGER,
+            responsable_ingreso_username TEXT,
+            ingresado_por_user_id     INTEGER,
+            ingresado_por_username    TEXT,
+            ingreso_sap_acuerdo_global INTEGER DEFAULT 0,
             notas                     TEXT,
             created_at                TEXT,
             updated_at                TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS oc_estado_historial (
+            id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo_oc                 TEXT NOT NULL,
+            estado_anterior           TEXT,
+            estado_nuevo              TEXT NOT NULL,
+            origen                    TEXT NOT NULL DEFAULT 'selector_estado',
+            actor_user_id             INTEGER,
+            actor_username            TEXT,
+            changed_at                TEXT NOT NULL,
+            created_at                TEXT,
+            updated_at                TEXT,
+            FOREIGN KEY (codigo_oc) REFERENCES oc_cabecera(codigo_oc)
+        );
+        CREATE INDEX IF NOT EXISTS idx_oc_estado_historial_codigo_fecha
+            ON oc_estado_historial(codigo_oc, changed_at DESC);
 
         CREATE TABLE IF NOT EXISTS oc_detalle (
             id                        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,6 +192,12 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             factor_empaque            REAL DEFAULT 1,
             cantidad_sap              REAL,
             precio_sap                REAL,
+            sap_mode                  TEXT,
+            sap_mode_origen           TEXT,
+            sap_values_origen         TEXT,
+            sap_values_updated_at     TEXT,
+            sap_values_updated_by_user_id INTEGER,
+            sap_values_updated_by_username TEXT,
             itemcode_sap              TEXT,
             descripcion_sap           TEXT,
             estado_homologacion       TEXT DEFAULT 'pendiente',
@@ -154,6 +219,35 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             updated_at      TEXT,
             UNIQUE(codigo_mp)
         );
+
+        CREATE TABLE IF NOT EXISTS oc_linea_sap_ajuste_historial (
+            id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo_oc                 TEXT NOT NULL,
+            correlativo               INTEGER NOT NULL,
+            codigo_mp                 TEXT,
+            itemcode_sap              TEXT,
+            tipo_oc                   TEXT,
+            rut_unidad                TEXT,
+            cantidad_base             REAL,
+            precio_base               REAL,
+            cantidad_anterior         REAL,
+            precio_anterior           REAL,
+            cantidad_nueva            REAL,
+            precio_nuevo              REAL,
+            cantidad_factor           REAL,
+            precio_factor             REAL,
+            accion                    TEXT NOT NULL,
+            actor_user_id             INTEGER,
+            actor_username            TEXT,
+            changed_at                TEXT NOT NULL,
+            created_at                TEXT,
+            updated_at                TEXT,
+            FOREIGN KEY (codigo_oc) REFERENCES oc_cabecera(codigo_oc)
+        );
+        CREATE INDEX IF NOT EXISTS idx_oc_linea_sap_ajuste_linea
+            ON oc_linea_sap_ajuste_historial(codigo_oc, correlativo, changed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_oc_linea_sap_ajuste_learning
+            ON oc_linea_sap_ajuste_historial(tipo_oc, rut_unidad, codigo_mp, itemcode_sap, changed_at DESC);
 
         CREATE TABLE IF NOT EXISTS sap_articulos (
             itemcode_sap    TEXT PRIMARY KEY,
@@ -189,6 +283,20 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             created_at      TEXT,
             updated_at      TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS vendedores_email (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            cartera         TEXT NOT NULL,
+            nombre          TEXT,
+            email           TEXT NOT NULL,
+            activo          INTEGER NOT NULL DEFAULT 1,
+            origen_archivo  TEXT,
+            created_at      TEXT,
+            updated_at      TEXT,
+            UNIQUE(cartera, email)
+        );
+        CREATE INDEX IF NOT EXISTS idx_vendedores_email_cartera_activo
+            ON vendedores_email(cartera, activo);
 
         CREATE VIEW IF NOT EXISTS vw_oc_detalle_sap AS
         SELECT
@@ -443,6 +551,113 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             CREATE INDEX IF NOT EXISTS idx_oc_detalle_itemcode
                 ON oc_detalle(itemcode_sap);
         """,
+        11: """
+            CREATE TABLE IF NOT EXISTS oc_estado_historial (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                codigo_oc       TEXT NOT NULL,
+                estado_anterior TEXT,
+                estado_nuevo    TEXT NOT NULL,
+                origen          TEXT NOT NULL DEFAULT 'selector_estado',
+                changed_at      TEXT NOT NULL,
+                created_at      TEXT,
+                updated_at      TEXT,
+                FOREIGN KEY (codigo_oc) REFERENCES oc_cabecera(codigo_oc)
+            );
+            CREATE INDEX IF NOT EXISTS idx_oc_estado_historial_codigo_fecha
+                ON oc_estado_historial(codigo_oc, changed_at DESC);
+        """,
+        12: """
+            CREATE TABLE IF NOT EXISTS notification_dispatch_log (
+                dispatch_key   TEXT PRIMARY KEY,
+                dispatch_type  TEXT NOT NULL,
+                cartera        TEXT,
+                scheduled_for  TEXT,
+                created_at     TEXT,
+                updated_at     TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_notification_dispatch_lookup
+                ON notification_dispatch_log(dispatch_type, scheduled_for, cartera);
+        """,
+        13: """
+            CREATE TABLE IF NOT EXISTS vendedores_email (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                cartera         TEXT NOT NULL,
+                nombre          TEXT,
+                email           TEXT NOT NULL,
+                activo          INTEGER NOT NULL DEFAULT 1,
+                origen_archivo  TEXT,
+                created_at      TEXT,
+                updated_at      TEXT,
+                UNIQUE(cartera, email)
+            );
+            CREATE INDEX IF NOT EXISTS idx_vendedores_email_cartera_activo
+                ON vendedores_email(cartera, activo);
+        """,
+        14: """
+            SELECT 1;
+        """,
+        15: """
+            CREATE TABLE IF NOT EXISTS oc_document_source (
+                codigo_oc             TEXT PRIMARY KEY,
+                source_type           TEXT NOT NULL,
+                source_locator        TEXT,
+                access_payload        TEXT,
+                snapshot_type         TEXT,
+                snapshot_path         TEXT,
+                snapshot_sha256       TEXT,
+                snapshot_size_bytes   INTEGER DEFAULT 0,
+                document_available    INTEGER DEFAULT 0,
+                document_regenerable  INTEGER DEFAULT 0,
+                last_verified_at      TEXT,
+                created_at            TEXT,
+                updated_at            TEXT,
+                FOREIGN KEY (codigo_oc) REFERENCES oc_cabecera(codigo_oc)
+            );
+            CREATE INDEX IF NOT EXISTS idx_oc_document_source_type
+                ON oc_document_source(source_type);
+        """,
+        16: """
+            UPDATE oc_cabecera
+            SET fecha_envio = fecha_creacion,
+                updated_at = COALESCE(updated_at, created_at)
+            WHERE COALESCE(TRIM(fecha_envio), '') = ''
+              AND COALESCE(TRIM(fecha_creacion), '') != ''
+              AND codigo_oc IN (
+                    SELECT codigo_oc
+                    FROM oc_document_source
+                    WHERE source_type = 'artikos'
+              );
+        """,
+        17: """
+            CREATE TABLE IF NOT EXISTS oc_linea_sap_ajuste_historial (
+                id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+                codigo_oc                 TEXT NOT NULL,
+                correlativo               INTEGER NOT NULL,
+                codigo_mp                 TEXT,
+                itemcode_sap              TEXT,
+                tipo_oc                   TEXT,
+                rut_unidad                TEXT,
+                cantidad_base             REAL,
+                precio_base               REAL,
+                cantidad_anterior         REAL,
+                precio_anterior           REAL,
+                cantidad_nueva            REAL,
+                precio_nuevo              REAL,
+                cantidad_factor           REAL,
+                precio_factor             REAL,
+                accion                    TEXT NOT NULL,
+                actor_user_id             INTEGER,
+                actor_username            TEXT,
+                changed_at                TEXT NOT NULL,
+                created_at                TEXT,
+                updated_at                TEXT,
+                FOREIGN KEY (codigo_oc) REFERENCES oc_cabecera(codigo_oc)
+            );
+            CREATE INDEX IF NOT EXISTS idx_oc_linea_sap_ajuste_linea
+                ON oc_linea_sap_ajuste_historial(codigo_oc, correlativo, changed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_oc_linea_sap_ajuste_learning
+                ON oc_linea_sap_ajuste_historial(tipo_oc, rut_unidad, codigo_mp, itemcode_sap, changed_at DESC);
+        """,
     }
 
     for version in sorted(v for v in migrations if v > current):
@@ -460,6 +675,67 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "oc_cabecera", "codigo_licitacion", "TEXT")
     _ensure_column(conn, "oc_cabecera", "direccion_despacho", "TEXT")
     _ensure_column(conn, "oc_cabecera", "direccion_facturacion", "TEXT")
+    _ensure_column(conn, "oc_cabecera", "responsable_ingreso_user_id", "INTEGER")
+    _ensure_column(conn, "oc_cabecera", "responsable_ingreso_username", "TEXT")
+    _ensure_column(conn, "oc_cabecera", "ingresado_por_user_id", "INTEGER")
+    _ensure_column(conn, "oc_cabecera", "ingresado_por_username", "TEXT")
+    _ensure_column(conn, "oc_cabecera", "ingreso_sap_acuerdo_global", "INTEGER DEFAULT 0")
+    _ensure_column(conn, "oc_estado_historial", "actor_user_id", "INTEGER")
+    _ensure_column(conn, "oc_estado_historial", "actor_username", "TEXT")
+    _ensure_column(conn, "oc_detalle", "sap_mode", "TEXT")
+    _ensure_column(conn, "oc_detalle", "sap_mode_origen", "TEXT")
+    _ensure_column(conn, "oc_detalle", "sap_values_origen", "TEXT")
+    _ensure_column(conn, "oc_detalle", "sap_values_updated_at", "TEXT")
+    _ensure_column(conn, "oc_detalle", "sap_values_updated_by_user_id", "INTEGER")
+    _ensure_column(conn, "oc_detalle", "sap_values_updated_by_username", "TEXT")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS oc_linea_sap_ajuste_historial (
+            id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo_oc                 TEXT NOT NULL,
+            correlativo               INTEGER NOT NULL,
+            codigo_mp                 TEXT,
+            itemcode_sap              TEXT,
+            tipo_oc                   TEXT,
+            rut_unidad                TEXT,
+            cantidad_base             REAL,
+            precio_base               REAL,
+            cantidad_anterior         REAL,
+            precio_anterior           REAL,
+            cantidad_nueva            REAL,
+            precio_nuevo              REAL,
+            cantidad_factor           REAL,
+            precio_factor             REAL,
+            accion                    TEXT NOT NULL,
+            actor_user_id             INTEGER,
+            actor_username            TEXT,
+            changed_at                TEXT NOT NULL,
+            created_at                TEXT,
+            updated_at                TEXT,
+            FOREIGN KEY (codigo_oc) REFERENCES oc_cabecera(codigo_oc)
+        );
+        CREATE INDEX IF NOT EXISTS idx_oc_linea_sap_ajuste_linea
+            ON oc_linea_sap_ajuste_historial(codigo_oc, correlativo, changed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_oc_linea_sap_ajuste_learning
+            ON oc_linea_sap_ajuste_historial(tipo_oc, rut_unidad, codigo_mp, itemcode_sap, changed_at DESC);
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_oc_cabecera_fecha_ingreso
+            ON oc_cabecera(fecha_ingreso)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_oc_cabecera_responsable_ingreso
+            ON oc_cabecera(responsable_ingreso_user_id, responsable_ingreso_username)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_oc_cabecera_ingresado_por
+            ON oc_cabecera(ingresado_por_user_id, ingresado_por_username)
+    """)
+    conn.execute("""
+        UPDATE licitaciones_ref
+        SET origen_archivo = '__usuario__'
+        WHERE COALESCE(origen_archivo, '') = ''
+    """)
+    _normalize_private_oc_codes(conn)
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -470,6 +746,58 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
     if column in existing:
         return
     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _normalize_private_oc_codes(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT codigo_oc
+        FROM oc_cabecera
+        WHERE tipo_oc = 'PRIVADA'
+        """
+    ).fetchall()
+    mappings: list[tuple[str, str]] = []
+    for row in rows:
+        old_code = (row["codigo_oc"] or "").strip()
+        match = re.fullmatch(r"[A-Z]{2,4}-(\d+)", old_code.upper())
+        if not match:
+            continue
+        new_code = match.group(1)
+        if new_code != old_code:
+            mappings.append((old_code, new_code))
+
+    if not mappings:
+        return
+
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        for old_code, new_code in mappings:
+            exists = conn.execute(
+                "SELECT 1 FROM oc_cabecera WHERE codigo_oc = ?",
+                (new_code,),
+            ).fetchone()
+            if exists:
+                logger.warning(
+                    "No se normalizo codigo privado %s -> %s porque el destino ya existe",
+                    old_code,
+                    new_code,
+                )
+                continue
+
+            for table in ("oc_detalle", "oc_estado_historial", "oc_privado_auditoria", "oc_document_source"):
+                conn.execute(
+                    f"UPDATE {table} SET codigo_oc = ? WHERE codigo_oc = ?",
+                    (new_code, old_code),
+                )
+            conn.execute(
+                "UPDATE oc_cabecera SET codigo_oc = ? WHERE codigo_oc = ?",
+                (new_code, old_code),
+            )
+
+        conn.commit()
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _seed_holdings(conn: sqlite3.Connection) -> None:

@@ -115,6 +115,12 @@ class CarteraService:
             self._reload_cache()
         return len(self._cache)
 
+    def list_carteras(self) -> List[str]:
+        """Retorna carteras unicas disponibles en el catalogo cargado."""
+        if not self._loaded:
+            self._reload_cache()
+        return sorted({item.cartera for item in self._cache.values() if item.cartera})
+
     def search(self, query: str, limit: int = 8) -> List[CarteraCliente]:
         """Busca clientes por razon social, codigo cliente o RUT."""
         if not self._loaded:
