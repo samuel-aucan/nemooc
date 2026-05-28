@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Cache bust — incrementar para forzar rebuild completo
-ARG CACHEBUST=20260528001
+ARG CACHEBUST=20260528003
 RUN echo "Cache bust: $CACHEBUST"
 
 # Copiar nemo_oc (core: modelos, servicios, repositorio)
