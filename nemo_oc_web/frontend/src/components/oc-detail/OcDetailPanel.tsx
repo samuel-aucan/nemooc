@@ -4,48 +4,93 @@ import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle,
-  CheckSquare,
   Copy,
-  ExternalLink,
-  FileDown,
-  RefreshCw,
+  RotateCcw,
   Save,
-  Settings,
-  X,
 } from 'lucide-react'
 
 import {
+  downloadOcDocumentPdf,
   asignarItemcode,
+  downloadOcDocumentHtml,
   exportOc,
   getOc,
+  getResponsablesIngreso,
   getSugerencias,
+  importarOcMp,
   limpiarAsignacion,
   marcarIngresada,
+  openOcDocument,
+  refreshOcMpStatus,
   rehomologarPrivada,
+  resetSapValues,
+  updateResponsableIngreso,
   updateEstado,
   updateNotas,
+  updateSapMode,
+  updateSapValues,
 } from '../../api/ocs'
 import { searchMaestra } from '../../api/catalogs'
 import { getConfig, updateConfig } from '../../api/config'
 import type { LineaOC } from '../../types/oc'
 import { copyText, hasSelectedText } from '../../utils/clipboard'
 import { storage } from '../../utils/storage'
-import { ESTADOS_INTERNOS, estadoInternoBgClass, fmtDate, fmtMoney, fmtNumberCL, homoBadge, homoRowBg } from '../../utils/formatters'
+import {
+  ESTADOS_INTERNOS,
+  displayOcCode,
+  estadoInternoBgClass,
+  fmtDate,
+  fmtMoney,
+  fmtMoneySmart,
+  fmtNumberCL,
+  fmtNumberSmartCL,
+  homoBadge,
+  homoRowBg,
+  normalizePublicOcCode,
+  parseDecimalCL,
+} from '../../utils/formatters'
 import ResizableTable from './ResizableTable'
 import SapColumnConfigModal from './SapColumnConfigModal'
 import OcDetailActions from './OcDetailActions'
 
 const IS_CM = (tipo: string) => tipo?.toUpperCase() === 'CM'
+const SAP_DISPLAY_TIPOS = new Set(['SE', 'AG', 'CC', 'TD'])
 const SAP_VTA_MIGRATION_KEY = 'sap-columns-vta-migrated-v1'
 
 export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onClose: () => void }) {
   const qc = useQueryClient()
+  const autoImportTriedRef = useRef<string | null>(null)
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['oc', codigo],
     queryFn: () => getOc(codigo),
     enabled: !!codigo,
+    retry: false,
   })
+
+  const importMpMutation = useMutation({
+    mutationFn: () => importarOcMp(codigo),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['oc', codigo] })
+      void qc.invalidateQueries({ queryKey: ['ocs'] })
+    },
+  })
+
+  // Auto-import desde MP cuando la OC no está en la base y parece código público
+  useEffect(() => {
+    if (
+      !isLoading &&
+      !data &&
+      error &&
+      normalizePublicOcCode(codigo) &&
+      !importMpMutation.isPending &&
+      !importMpMutation.isSuccess &&
+      autoImportTriedRef.current !== codigo
+    ) {
+      autoImportTriedRef.current = codigo
+      importMpMutation.mutate()
+    }
+  }, [isLoading, data, error, codigo, importMpMutation])
 
   const [selectedCorr, setSelectedCorr] = useState<number | null>(null)
   const [showSapConfig, setShowSapConfig] = useState(false)
@@ -53,11 +98,17 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
   const [notas, setNotas] = useState('')
   const [notasSaved, setNotasSaved] = useState(false)
   const [notasDirty, setNotasDirty] = useState(false)
+  const [acuerdoGlobal, setAcuerdoGlobal] = useState(false)
 
   const { data: appConfig } = useQuery({ queryKey: ['config'], queryFn: getConfig })
+  const { data: responsables = [] } = useQuery({
+    queryKey: ['responsables-ingreso'],
+    queryFn: getResponsablesIngreso,
+    staleTime: 5 * 60_000,
+  })
 
   const migrateSapColumns = useMutation({
-    mutationFn: (columns: string[]) => updateConfig({ sap_columns: columns }),
+    mutationFn: (payload: { sap_columns?: string[]; sap_global_columns?: string[] }) => updateConfig(payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['config'] })
     },
@@ -71,11 +122,21 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
   })
 
   const mutIngresada = useMutation({
-    mutationFn: () => marcarIngresada(codigo),
+    mutationFn: () => marcarIngresada(codigo, acuerdoGlobal),
     onSuccess: () => {
       invalidate()
       qc.invalidateQueries({ queryKey: ['stats'] })
       qc.invalidateQueries({ queryKey: ['ocs'] })
+      qc.invalidateQueries({ queryKey: ['ocs-analytics'] })
+    },
+  })
+
+  const mutResponsable = useMutation({
+    mutationFn: (userId: number | null) => updateResponsableIngreso(codigo, userId),
+    onSuccess: () => {
+      invalidate()
+      qc.invalidateQueries({ queryKey: ['ocs'] })
+      qc.invalidateQueries({ queryKey: ['ocs-analytics'] })
     },
   })
 
@@ -90,6 +151,23 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
           : 'No se encontraron nuevas homologaciones en el catalogo.'
       )
       setTimeout(() => setCopyMsg(''), 4000)
+    },
+  })
+
+  const mutRefreshMp = useMutation({
+    mutationFn: () => refreshOcMpStatus(codigo),
+    onSuccess: (result) => {
+      invalidate()
+      qc.invalidateQueries({ queryKey: ['ocs'] })
+      qc.invalidateQueries({ queryKey: ['sync-status'] })
+      const label = result.estado_mp || `codigo ${result.codigo_estado_mp}`
+      setCopyMsg(result.updated ? `Estado MP actualizado: ${label}.` : `Estado MP sin cambios: ${label}.`)
+      setTimeout(() => setCopyMsg(''), 3500)
+    },
+    onError: (err) => {
+      const detail = err instanceof Error ? err.message : 'No se pudo consultar Mercado Publico.'
+      setCopyMsg(detail)
+      setTimeout(() => setCopyMsg(''), 4500)
     },
   })
 
@@ -113,35 +191,90 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
   useEffect(() => {
     if (typeof window === 'undefined' || !appConfig?.sap_columns?.length) return
     if (storage.getItem(SAP_VTA_MIGRATION_KEY)) return
-    if (appConfig.sap_columns.includes('vta')) {
+
+    const payload: { sap_columns?: string[]; sap_global_columns?: string[] } = {}
+    if (!appConfig.sap_columns.includes('vta')) {
+      const nextColumns = [...appConfig.sap_columns]
+      const itemcodeIdx = nextColumns.indexOf('itemcode')
+      nextColumns.splice(itemcodeIdx >= 0 ? itemcodeIdx + 1 : 0, 0, 'vta')
+      payload.sap_columns = nextColumns
+    }
+
+    if (appConfig.sap_global_columns?.length && !appConfig.sap_global_columns.includes('vta')) {
+      const nextGlobalColumns = [...appConfig.sap_global_columns]
+      const itemcodeIdx = nextGlobalColumns.indexOf('itemcode')
+      nextGlobalColumns.splice(itemcodeIdx >= 0 ? itemcodeIdx + 1 : 0, 0, 'vta')
+      payload.sap_global_columns = nextGlobalColumns
+    }
+
+    if (!payload.sap_columns && !payload.sap_global_columns) {
       storage.setItem(SAP_VTA_MIGRATION_KEY, '1')
       return
     }
 
-    const nextColumns = [...appConfig.sap_columns]
-    const itemcodeIdx = nextColumns.indexOf('itemcode')
-    nextColumns.splice(itemcodeIdx >= 0 ? itemcodeIdx + 1 : 0, 0, 'vta')
     storage.setItem(SAP_VTA_MIGRATION_KEY, '1')
-    migrateSapColumns.mutate(nextColumns)
-  }, [appConfig?.sap_columns, migrateSapColumns])
+    migrateSapColumns.mutate(payload)
+  }, [appConfig?.sap_columns, appConfig?.sap_global_columns, migrateSapColumns])
 
   if (isLoading) {
     return <div className="flex h-full items-center justify-center text-gray-500">Cargando OC...</div>
   }
 
   if (!data) {
-    return <div className="p-4 text-red-400">OC no encontrada</div>
+    // Mientras intenta buscar en MP
+    if (importMpMutation.isPending) {
+      return (
+        <div className="flex h-full items-center justify-center gap-2 text-cyan-400">
+          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+          </svg>
+          Buscando en Mercado Público…
+        </div>
+      )
+    }
+    const detailError = importMpMutation.isError
+      ? (importMpMutation.error instanceof Error ? importMpMutation.error.message : 'No encontrada en Mercado Público')
+      : (error instanceof Error ? error.message : '')
+    return (
+      <div className="space-y-3 p-4">
+        <div className="text-red-400">No se pudo cargar el detalle de la OC.</div>
+        {detailError ? <div className="text-sm text-gray-500">{detailError}</div> : null}
+        {normalizePublicOcCode(codigo) && importMpMutation.isError && (
+          <button
+            className="btn-secondary text-xs"
+            onClick={() => {
+              autoImportTriedRef.current = null
+              importMpMutation.reset()
+            }}
+          >
+            Reintentar búsqueda en MP
+          </button>
+        )}
+      </div>
+    )
   }
 
-  const { cabecera: oc, lineas } = data
+  const { cabecera: oc, lineas, documento } = data
   const esCM = IS_CM(oc.tipo_oc)
+  const displayCode = displayOcCode(oc.codigo_oc, oc.tipo_oc)
   const sinHomologar = lineas.filter((linea) => !linea.itemcode_sap).length
+  const hasDocument = Boolean(documento?.document_available)
+  const hasArtikosDocument = documento?.source_type === 'artikos' && documento.document_available
+  const hasImapPdfDocument = documento?.source_type === 'imap_attachment' && documento.document_available
+  const documentAccessKind = getDocumentAccessKindLabel(documento?.access_payload?.credential_kind)
+  const documentVerifiedAt = formatDateTime(documento?.last_verified_at || '')
+  const detectedAt = formatDateTime(oc.created_at || documento?.created_at || '')
 
   const handleCopySap = async () => {
     let excluidos = 0
-    const columns = appConfig?.sap_columns?.length
-      ? appConfig.sap_columns
-      : ['itemcode', 'descripcion', 'cantidad', 'precio']
+    const defaultColumns = ['itemcode', 'vta', 'cantidad_sap', 'precio_sap']
+    const normalColumns = appConfig?.sap_columns?.length ? appConfig.sap_columns : defaultColumns
+    const columns = acuerdoGlobal
+      ? appConfig?.sap_global_columns?.length
+        ? appConfig.sap_global_columns
+        : normalColumns
+      : normalColumns
 
     const rows = lineas
       .map((linea) => {
@@ -157,11 +290,11 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
             if (column === 'descripcion') return linea.descripcion_sap || linea.producto || ''
             if (column === 'cantidad') return linea.cantidad != null ? fmtNumberCL(linea.cantidad, 0) : ''
             if (column === 'cantidad_sap') {
-              return linea.cantidad_sap != null ? fmtNumberCL(linea.cantidad_sap, 0) : fmtNumberCL(linea.cantidad, 0)
+              return linea.cantidad_sap != null ? fmtNumberSmartCL(linea.cantidad_sap, 4) : fmtNumberSmartCL(linea.cantidad, 4)
             }
-            if (column === 'precio') return linea.precio_neto != null ? fmtNumberCL(linea.precio_neto) : ''
+            if (column === 'precio') return linea.precio_neto != null ? fmtNumberSmartCL(linea.precio_neto, 4) : ''
             if (column === 'precio_sap') {
-              return linea.precio_sap != null ? fmtNumberCL(linea.precio_sap) : linea.precio_neto != null ? fmtNumberCL(linea.precio_neto) : ''
+              return linea.precio_sap != null ? fmtNumberSmartCL(linea.precio_sap, 4) : linea.precio_neto != null ? fmtNumberSmartCL(linea.precio_neto, 4) : ''
             }
             if (column === 'total') return linea.total != null ? fmtNumberCL(linea.total) : ''
             if (column === 'unidad') return linea.unidad || ''
@@ -173,7 +306,12 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
       .filter(Boolean)
 
     await copyText(rows.join('\r\n'))
-    setCopyMsg(excluidos > 0 ? `Copiado. ${excluidos} linea(s) sin itemcode fueron omitidas.` : 'Texto copiado para SAP.')
+    const formatLabel = acuerdoGlobal ? 'Acuerdo global' : 'Normal'
+    setCopyMsg(
+      excluidos > 0
+        ? `Copiado (${formatLabel}). ${excluidos} linea(s) sin itemcode fueron omitidas.`
+        : `Texto copiado para SAP (${formatLabel}).`
+    )
     setTimeout(() => setCopyMsg(''), 3000)
   }
 
@@ -181,6 +319,21 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
     await copyText(text)
     setCopyMsg(`${label} copiado.`)
     setTimeout(() => setCopyMsg(''), 2000)
+  }
+
+  const handleOpenDocument = () => {
+    if (!hasDocument) return
+    openOcDocument(codigo)
+  }
+
+  const handleDownloadPdf = () => {
+    if (!hasDocument) return
+    downloadOcDocumentPdf(codigo)
+  }
+
+  const handleDownloadDocument = () => {
+    if (!hasArtikosDocument) return
+    downloadOcDocumentHtml(codigo)
   }
 
   const handleCopyInline = async (event: ReactMouseEvent, text: string, label: string) => {
@@ -194,8 +347,8 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-gray-950">
-      <div className="border-b border-gray-800 bg-gray-900/90 px-4 py-2.5">
+    <div className="oc-view-shell app-content-transparent flex h-full flex-col overflow-hidden">
+      <div className="oc-subtle-strip border-b border-gray-800 px-4 py-2.5">
         <div className="flex flex-col gap-2.5">
           <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
             <div className="min-w-0 flex flex-wrap items-center gap-2">
@@ -224,13 +377,13 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
                   title="Doble clic para copiar"
                   onMouseDown={blockRowToggle}
                   onClick={blockRowToggle}
-                  onDoubleClick={(event) => handleCopyInline(event, oc.codigo_oc, 'Codigo OC')}
+                  onDoubleClick={(event) => handleCopyInline(event, displayCode, 'Codigo OC')}
                 >
-                  {oc.codigo_oc}
+                  {displayCode}
                 </span>
                 <button
                   className="btn-ghost px-2.5 py-1.5 text-[11px]"
-                  onClick={() => handleCopy(oc.codigo_oc, 'Codigo OC')}
+                  onClick={() => handleCopy(displayCode, 'Codigo OC')}
                   aria-label="Copiar codigo OC"
                 >
                   <Copy size={13} />
@@ -251,13 +404,21 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
 
             <OcDetailActions
               oc={oc}
+              documento={documento}
               esCM={esCM}
               isRehomologating={mutRehomologar.isPending}
               isIngresando={mutIngresada.isPending}
+              isRefreshingMp={mutRefreshMp.isPending}
+              acuerdoGlobal={acuerdoGlobal}
+              onToggleAcuerdoGlobal={setAcuerdoGlobal}
               onRehomologar={() => mutRehomologar.mutate()}
+              onRefreshMpStatus={() => mutRefreshMp.mutate()}
               onCopySap={handleCopySap}
               onOpenSapConfig={() => setShowSapConfig(true)}
               onExport={() => exportOc(codigo)}
+              onOpenDocument={handleOpenDocument}
+              onDownloadPdf={handleDownloadPdf}
+              onDownloadDocument={handleDownloadDocument}
               onIngresar={() => mutIngresada.mutate()}
               onClose={onClose}
             />
@@ -270,8 +431,14 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
               title={oc.razon_social || oc.nombre_organismo}
               className="min-w-[260px] flex-[1.4]"
             />
+            <CompactMeta
+              label="Detectada"
+              value={detectedAt || 'Sin registro'}
+              className="min-w-[145px]"
+            />
             <CompactMeta label="Fecha envio" value={fmtDate(oc.fecha_envio)} className="min-w-[120px]" />
             <CompactMeta label="Cartera" value={oc.cartera || 'Sin cartera'} className="min-w-[110px]" />
+            <CompactMeta label="Ejecutivo" value={oc.vendedor || 'Sin ejecutivo'} className="min-w-[140px]" />
             <CompactMeta
               label="Neto"
               value={fmtMoney(oc.total_neto, oc.moneda)}
@@ -285,7 +452,6 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
             <CompactMeta
               label="Total bruto"
               value={fmtMoney(oc.total, oc.moneda)}
-              secondary={`${lineas.length} linea(s)`}
               className="min-w-[150px]"
             />
             {oc.codigo_licitacion && (
@@ -343,6 +509,33 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
               </select>
             </div>
 
+            <div className="min-w-[190px]">
+              <label className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-gray-500">Responsable SAP</label>
+              <select
+                className="select"
+                value={oc.responsable_ingreso_user_id ?? ''}
+                onChange={(event) => {
+                  const raw = event.target.value
+                  mutResponsable.mutate(raw === '' ? null : Number(raw))
+                }}
+                disabled={mutResponsable.isPending}
+              >
+                <option value="">Sin responsable</option>
+                {responsables.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.nombre_completo || user.username}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <CompactMeta
+              label="Ingresado por"
+              value={oc.ingresado_por_username || 'Sin dato'}
+              secondary={oc.ingreso_sap_acuerdo_global ? 'Acuerdo global' : undefined}
+              className="min-w-[130px]"
+            />
+
             <div className="min-w-[280px] flex-1">
               <label className="mb-0.5 block text-[10px] uppercase tracking-[0.12em] text-gray-500">Notas internas</label>
               <input
@@ -368,6 +561,25 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
               {notasSaved && <span className="text-xs text-emerald-300">Guardado</span>}
             </div>
           </div>
+
+          {(hasArtikosDocument || hasImapPdfDocument) && (
+            <div className="flex flex-wrap items-center gap-3 rounded-xl border border-cyan-900/50 bg-cyan-950/20 px-4 py-3">
+              <div className="min-w-[220px] flex-1">
+                <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-cyan-300/75">
+                  {hasImapPdfDocument ? 'Documento privado' : 'Documento Artikos'}
+                </div>
+                <div className="text-sm font-medium text-cyan-100">
+                  {hasImapPdfDocument
+                    ? 'PDF recuperable desde el correo original sin almacenarlo en NemoOC.'
+                    : 'Respaldo HTML disponible con PDF automatico generado al momento.'}
+                </div>
+                <div className="mt-1 text-xs text-cyan-200/80">
+                  {documentVerifiedAt ? `Validado: ${documentVerifiedAt}` : 'Validado recientemente'}
+                  {documentAccessKind ? ` | Acceso: ${documentAccessKind}` : ''}
+                </div>
+              </div>
+            </div>
+          )}
 
           {copyMsg && (
             <div className="rounded-xl border border-emerald-800/60 bg-emerald-950/25 px-4 py-3 text-sm text-emerald-200">
@@ -400,6 +612,7 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
             { id: 'pneto', label: 'P. Neto', align: 'right', minWidth: 70, defaultWidth: 90 },
             { id: 'psap', label: 'P. SAP', align: 'right', minWidth: 70, defaultWidth: 90 },
             { id: 'total', label: 'Total', align: 'right', minWidth: 70, defaultWidth: 100 },
+            { id: 'sap', label: 'SAP', minWidth: 96, defaultWidth: 112 },
             { id: 'estado', label: 'Estado', minWidth: 90, defaultWidth: 120 },
           ]}
         >
@@ -410,6 +623,7 @@ export default function OcDetailPanel({ codigo, onClose }: { codigo: string; onC
               selected={selectedCorr === linea.correlativo}
               onClick={() => setSelectedCorr((current) => (current === linea.correlativo ? null : linea.correlativo))}
               codigoOc={codigo}
+              tipoOc={oc.tipo_oc}
               onUpdate={invalidate}
             />
           ))}
@@ -426,20 +640,29 @@ function LineaRow({
   selected,
   onClick,
   codigoOc,
+  tipoOc,
   onUpdate,
 }: {
   linea: LineaOC
   selected: boolean
   onClick: () => void
   codigoOc: string
+  tipoOc: string
   onUpdate: () => void
 }) {
   const [manualCode, setManualCode] = useState('')
   const [message, setMessage] = useState('')
   const [showDropdown, setShowDropdown] = useState(false)
   const [dropdownRect, setDropdownRect] = useState<DOMRect | null>(null)
+  const [cantidadSapDraft, setCantidadSapDraft] = useState(formatSapDraftValue(linea.cantidad_sap ?? linea.cantidad))
+  const [precioSapDraft, setPrecioSapDraft] = useState(formatSapDraftValue(linea.precio_sap ?? linea.precio_neto))
   const inputRef = useRef<HTMLInputElement>(null)
   const debouncedCode = useDebounce(manualCode, 300)
+
+  useEffect(() => {
+    setCantidadSapDraft(formatSapDraftValue(linea.cantidad_sap ?? linea.cantidad))
+    setPrecioSapDraft(formatSapDraftValue(linea.precio_sap ?? linea.precio_neto))
+  }, [linea.correlativo, linea.cantidad, linea.cantidad_sap, linea.precio_neto, linea.precio_sap])
 
   const { data: sugerencias, isLoading: loadingSugerencias } = useQuery({
     queryKey: ['sugs', codigoOc, linea.correlativo],
@@ -453,6 +676,32 @@ function LineaRow({
     queryFn: () => searchMaestra(debouncedCode),
     enabled: selected && showDropdown && debouncedCode.length >= 3,
     staleTime: 60_000,
+  })
+
+  const mutSapMode = useMutation({
+    mutationFn: (mode: 'unitario' | 'display') => updateSapMode(codigoOc, linea.correlativo, mode),
+    onSuccess: () => {
+      onUpdate()
+    },
+  })
+
+  const mutSapValues = useMutation({
+    mutationFn: (values: { cantidad_sap: number; precio_sap: number }) =>
+      updateSapValues(codigoOc, linea.correlativo, values),
+    onSuccess: () => {
+      setMessage('Valores SAP guardados')
+      setTimeout(() => setMessage(''), 2500)
+      onUpdate()
+    },
+  })
+
+  const mutResetSapValues = useMutation({
+    mutationFn: () => resetSapValues(codigoOc, linea.correlativo),
+    onSuccess: () => {
+      setMessage('Valores SAP recalculados')
+      setTimeout(() => setMessage(''), 2500)
+      onUpdate()
+    },
   })
 
   const assign = async (itemcode: string, descripcion = '') => {
@@ -473,6 +722,17 @@ function LineaRow({
 
   const descText = linea.especificacion_comprador || linea.producto || ''
   const badge = homoBadge(linea.estado_homologacion)
+  const sapModeVisible = SAP_DISPLAY_TIPOS.has((tipoOc || '').toUpperCase()) && !!linea.itemcode_sap
+  const sapModeEnabled = sapModeVisible && (linea.factor_empaque || 1) > 1
+  const currentSapMode = linea.sap_mode === 'display' ? 'display' : 'unitario'
+  const historyText = linea.sap_mode_historial_total > 0
+    ? `Historial ${linea.sap_mode_historial_display} DISP / ${linea.sap_mode_historial_unitario} UNI`
+    : 'Sin historial aun'
+  const sapModeTitle = sapModeEnabled
+    ? `Factor display x${fmtNumberCL(linea.factor_empaque || 1, 0)}. ${historyText}.`
+    : sapModeVisible
+      ? 'Este item no tiene factor util en la maestra, por eso DISP no esta disponible.'
+      : ''
   const copyCell = async (event: ReactMouseEvent, text: string, okMessage: string) => {
     event.stopPropagation()
     if (!text) return
@@ -484,6 +744,34 @@ function LineaRow({
   const blockRowToggle = (event: ReactMouseEvent) => {
     event.stopPropagation()
   }
+
+  const handleSapMode = async (event: ReactMouseEvent, mode: 'unitario' | 'display') => {
+    event.stopPropagation()
+    if (!sapModeEnabled || currentSapMode === mode || mutSapMode.isPending) return
+    await mutSapMode.mutateAsync(mode)
+  }
+
+  const handleSaveSapValues = async () => {
+    const cantidad_sap = parseSapDraftValue(cantidadSapDraft)
+    const precio_sap = parseSapDraftValue(precioSapDraft)
+    if (cantidad_sap == null || precio_sap == null) {
+      setMessage('Cantidad y precio SAP deben ser numericos')
+      setTimeout(() => setMessage(''), 2500)
+      return
+    }
+    await mutSapValues.mutateAsync({ cantidad_sap, precio_sap })
+  }
+
+  const handleResetSapValues = async () => {
+    await mutResetSapValues.mutateAsync()
+  }
+
+  const sapValueTone = linea.sap_values_origen === 'manual'
+    ? 'text-amber-300'
+    : linea.sap_values_origen === 'aprendizaje'
+      ? 'text-emerald-300'
+      : 'text-gray-400'
+  const sapOriginLabel = getSapValuesOriginLabel(linea.sap_values_origen)
 
   return (
     <>
@@ -533,11 +821,61 @@ function LineaRow({
             {linea.descripcion_sap || '-'}
           </span>
         </td>
-        <td className="text-right">{linea.cantidad}</td>
-        <td className="text-right text-gray-400">{linea.cantidad_sap ?? '-'}</td>
-        <td className="text-right">{fmtMoney(linea.precio_neto)}</td>
-        <td className="text-right text-gray-400">{linea.precio_sap != null ? fmtMoney(linea.precio_sap) : '-'}</td>
+        <td className="text-right">{fmtNumberSmartCL(linea.cantidad, 4)}</td>
+        <td className={`text-right ${sapValueTone}`}>{fmtNumberSmartCL(linea.cantidad_sap ?? linea.cantidad, 4)}</td>
+        <td className="text-right">{fmtMoneySmart(linea.precio_neto, linea.moneda, 4)}</td>
+        <td className={`text-right ${sapValueTone}`}>{fmtMoneySmart(linea.precio_sap ?? linea.precio_neto, linea.moneda, 4)}</td>
         <td className="text-right">{fmtMoney(linea.total)}</td>
+        <td>
+          <div className="space-y-1">
+          {sapModeVisible ? (
+            <div className="space-y-1" title={sapModeTitle}>
+              <div className="inline-flex rounded-lg border border-gray-800 bg-gray-950/70 p-0.5">
+                <button
+                  type="button"
+                  className={`rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] transition-colors ${
+                    currentSapMode === 'unitario'
+                      ? 'bg-cyan-500/20 text-cyan-200'
+                      : 'text-gray-400 hover:bg-gray-900 hover:text-gray-200'
+                  }`}
+                  onMouseDown={blockRowToggle}
+                  onClick={(event) => handleSapMode(event, 'unitario')}
+                  disabled={mutSapMode.isPending || !sapModeEnabled || currentSapMode === 'unitario'}
+                >
+                  UNI
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] transition-colors ${
+                    currentSapMode === 'display'
+                      ? 'bg-emerald-500/20 text-emerald-200'
+                      : sapModeEnabled
+                        ? 'text-gray-400 hover:bg-gray-900 hover:text-gray-200'
+                        : 'cursor-not-allowed text-gray-600'
+                  }`}
+                  onMouseDown={blockRowToggle}
+                  onClick={(event) => handleSapMode(event, 'display')}
+                  disabled={mutSapMode.isPending || !sapModeEnabled || currentSapMode === 'display'}
+                >
+                  DISP
+                </button>
+              </div>
+              {!sapModeEnabled && (
+                <div className="text-[10px] text-amber-400/80">
+                  Sin factor maestra
+                </div>
+              )}
+            </div>
+          ) : (
+            <span className="text-xs text-gray-600">-</span>
+          )}
+          {sapOriginLabel && (
+            <div className={`text-[10px] font-semibold uppercase tracking-[0.08em] ${sapValueTone}`}>
+              {sapOriginLabel}
+            </div>
+          )}
+          </div>
+        </td>
         <td>
           <span className={`text-xs font-medium ${badge.color}`}>{badge.label}</span>
         </td>
@@ -545,8 +883,11 @@ function LineaRow({
 
       {selected && (
         <tr className="bg-gray-900/70">
-          <td colSpan={11} className="px-4 py-3">
-            <div className="space-y-3">
+          <td colSpan={12} className="px-4 py-3">
+            <div
+              className="sticky left-0 space-y-3 pr-3"
+              style={{ width: 'min(980px, max(320px, calc(100vw - 13rem)))', maxWidth: 'calc(100vw - 2rem)' }}
+            >
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 {sugerencias && sugerencias.length > 0 && (
                   <div className="flex flex-wrap items-center gap-2">
@@ -567,6 +908,45 @@ function LineaRow({
                 {sugerencias?.length === 0 && !loadingSugerencias && (
                   <span className="text-gray-500">No hay sugerencias automaticas para esta linea.</span>
                 )}
+              </div>
+
+              <div className="flex flex-wrap items-end gap-2 rounded-lg border border-gray-800 bg-gray-950/45 px-3 py-3">
+                <label className="min-w-[120px] flex-1 text-xs text-gray-400">
+                  Cant SAP
+                  <input
+                    className="input mt-1 h-9 text-right font-mono"
+                    inputMode="decimal"
+                    value={cantidadSapDraft}
+                    onChange={(event) => setCantidadSapDraft(event.target.value)}
+                  />
+                </label>
+                <label className="min-w-[140px] flex-1 text-xs text-gray-400">
+                  Precio SAP
+                  <input
+                    className="input mt-1 h-9 text-right font-mono"
+                    inputMode="decimal"
+                    value={precioSapDraft}
+                    onChange={(event) => setPrecioSapDraft(event.target.value)}
+                  />
+                </label>
+                <button
+                  className="btn-primary h-9 px-3 text-xs"
+                  onClick={handleSaveSapValues}
+                  disabled={mutSapValues.isPending || mutResetSapValues.isPending}
+                  title="Guardar valores SAP manuales"
+                >
+                  <Save size={14} />
+                  Guardar y aprender
+                </button>
+                <button
+                  className="btn-secondary h-9 px-3 text-xs"
+                  onClick={handleResetSapValues}
+                  disabled={mutSapValues.isPending || mutResetSapValues.isPending}
+                  title="Recalcular con la regla automatica"
+                >
+                  <RotateCcw size={14} />
+                  Recalcular
+                </button>
               </div>
 
               <div className="flex flex-wrap items-start gap-2">
@@ -668,6 +1048,52 @@ function CompactMeta({
       {secondary && <div className="text-xs text-gray-500">{secondary}</div>}
     </div>
   )
+}
+
+function formatDateTime(value: string): string {
+  if (!value) return ''
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return new Intl.DateTimeFormat('es-CL', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(parsed)
+}
+
+function getDocumentAccessKindLabel(kind?: string): string {
+  switch ((kind || '').toLowerCase()) {
+    case 'rut':
+    case 'rut_normalizado':
+    case 'rut_sin_guion':
+      return 'RUT proveedor'
+    case 'codigo_empresa':
+    case 'codigo_empresa_digitos':
+      return 'Codigo empresa'
+    default:
+      return ''
+  }
+}
+
+function formatSapDraftValue(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(Number(value))) return ''
+  return fmtNumberSmartCL(Number(value), 4)
+}
+
+function parseSapDraftValue(value: string): number | null {
+  const parsed = parseDecimalCL(value)
+  if (parsed == null || parsed < 0) return null
+  return parsed
+}
+
+function getSapValuesOriginLabel(origin?: string | null): string {
+  switch ((origin || '').toLowerCase()) {
+    case 'manual':
+      return 'Manual'
+    case 'aprendizaje':
+      return 'Aprendido'
+    default:
+      return ''
+  }
 }
 
 function CopyableMetaWithButton({

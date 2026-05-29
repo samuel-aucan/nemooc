@@ -5,14 +5,59 @@ export const fmtMoney = (value: number, moneda = 'CLP') =>
     maximumFractionDigits: 0,
   }).format(value)
 
+const hasDecimalPart = (value: number) => Math.abs(value - Math.trunc(value)) > 0.000001
+
+export const fmtMoneySmart = (value: number, moneda = 'CLP', decimals = 2) =>
+  new Intl.NumberFormat('es-CL', {
+    style: 'currency',
+    currency: moneda,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: hasDecimalPart(value) ? decimals : 0,
+  }).format(value)
+
 export const fmtDate = (iso: string) => {
   if (!iso) return ''
   return iso.slice(0, 10)
 }
 
+export const displayOcCode = (codigoOc: string, tipoOc?: string) => {
+  if (tipoOc !== 'PRIVADA') return codigoOc
+  return codigoOc.replace(/^[A-Z]+-/, '')
+}
+
 export const fmtNumberCL = (value: number, decimals = 2): string => {
   if (value === Math.floor(value) && decimals <= 0) return value.toString()
   return value.toFixed(decimals).replace('.', ',')
+}
+
+export const fmtNumberSmartCL = (value: number, decimals = 2): string => {
+  if (!Number.isFinite(value)) return ''
+  if (!hasDecimalPart(value)) return Math.trunc(value).toString()
+  return value
+    .toFixed(decimals)
+    .replace(/0+$/, '')
+    .replace(/\.$/, '')
+    .replace('.', ',')
+}
+
+export const parseDecimalCL = (value: string): number | null => {
+  const raw = value.trim()
+  if (!raw) return null
+
+  const withoutSpaces = raw.replace(/\s+/g, '')
+  const lastComma = withoutSpaces.lastIndexOf(',')
+  const lastDot = withoutSpaces.lastIndexOf('.')
+  const decimalSeparator = lastComma > lastDot ? ',' : lastDot >= 0 ? '.' : ''
+  let normalized = withoutSpaces
+
+  if (decimalSeparator) {
+    const thousandsSeparator = decimalSeparator === ',' ? '.' : ','
+    const thousandsPattern = thousandsSeparator === '.' ? /\./g : /,/g
+    normalized = normalized.replace(thousandsPattern, '').replace(decimalSeparator, '.')
+  }
+
+  const parsed = Number(normalized)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 export const homoClass = (estado: string): string => {
@@ -104,6 +149,12 @@ export const estadoInternoBgClass = (estado: string): string => {
     default:
       return 'bg-gray-500/15 text-gray-300 border border-gray-500/25'
   }
+}
+
+/** Retorna el código normalizado si parece una OC pública válida, o '' si no. */
+export function normalizePublicOcCode(value?: string): string {
+  const normalized = (value || '').trim().toUpperCase()
+  return /^\d{4,}-\d{1,}-[A-Z]{2,4}\d{2}$/.test(normalized) ? normalized : ''
 }
 
 export const ESTADOS_INTERNOS = [
