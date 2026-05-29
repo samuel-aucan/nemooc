@@ -840,43 +840,24 @@ def asignar_itemcode(codigo_oc: str, correlativo: int, body: AsignarItemcodeIn):
         descripcion_sap=body.descripcion_sap,
         origen=estado,
     )
-    # Sincronizar homologación en Supabase
-    try:
-        from backend.supabase_write_service import sync_homologacion as _sync_sb
-        _sync_sb(
-            codigo_oc=codigo_oc,
-            nro_linea=correlativo,
-            itemcode_sap=body.itemcode_sap,
-            descripcion_sap=body.descripcion_sap,
-            cantidad_sap=None,
-            precio_sap=None,
-            sap_mode=None,
-            estado_homologacion=estado,
-        )
-    except Exception:
-        pass
-    return {"ok": True}
+    # Retornar los datos actualizados para que el frontend los muestre
+    return {
+        "ok": True,
+        "itemcode_sap": body.itemcode_sap,
+        "descripcion_sap": body.descripcion_sap or "",
+        "estado_homologacion": estado,
+    }
 
 
 @router.delete("/{codigo_oc}/lineas/{correlativo}/asignar")
 def limpiar_asignacion(codigo_oc: str, correlativo: int):
     oc_repository.limpiar_asignacion_linea(codigo_oc, correlativo)
-    # Limpiar en Supabase también
-    try:
-        from backend.supabase_write_service import sync_homologacion as _sync_sb
-        _sync_sb(
-            codigo_oc=codigo_oc,
-            nro_linea=correlativo,
-            itemcode_sap=None,
-            descripcion_sap=None,
-            cantidad_sap=None,
-            precio_sap=None,
-            sap_mode=None,
-            estado_homologacion="pendiente",
-        )
-    except Exception:
-        pass
-    return {"ok": True}
+    return {
+        "ok": True,
+        "itemcode_sap": None,
+        "descripcion_sap": None,
+        "estado_homologacion": "pendiente",
+    }
 
 
 @router.put("/{codigo_oc}/lineas/{correlativo}/sap-mode")
