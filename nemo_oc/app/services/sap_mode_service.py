@@ -47,7 +47,10 @@ def get_display_factor(itemcode_sap: Optional[str], fallback_factor: float = 1.0
 
 
 def enrich_linea_for_api(linea: LineaOC, tipo_oc: str) -> LineaOC:
-    factor = get_display_factor(linea.itemcode_sap, linea.factor_empaque)
+    try:
+        factor = get_display_factor(linea.itemcode_sap, linea.factor_empaque)
+    except Exception:
+        factor = float(linea.factor_empaque or 1.0)
     applicable = supports_display_mode(tipo_oc) and bool(linea.itemcode_sap) and factor > 1
 
     if not applicable:
@@ -68,7 +71,10 @@ def enrich_linea_for_api(linea: LineaOC, tipo_oc: str) -> LineaOC:
     )
     linea.sap_mode = inferred_mode or SAP_MODE_UNITARIO
 
-    history = get_recent_mode_stats(linea.itemcode_sap, factor, SAP_HISTORY_LIMIT)
+    try:
+        history = get_recent_mode_stats(linea.itemcode_sap, factor, SAP_HISTORY_LIMIT)
+    except Exception:
+        history = {"display": 0, "unitario": 0, "total": 0}
     linea.sap_mode_historial_total = history["total"]
     linea.sap_mode_historial_display = history["display"]
     linea.sap_mode_historial_unitario = history["unitario"]

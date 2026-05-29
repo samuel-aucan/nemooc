@@ -130,6 +130,13 @@ def _looks_generic_address(value: str) -> bool:
     }
 
 
+def _actualizar_campos_publicos_compat(codigo_oc: str, **campos) -> None:
+    try:
+        oc_repository.actualizar_campos_publicos(codigo_oc, **campos)
+    except TypeError:
+        oc_repository.actualizar_campos_publicos(codigo_oc, campos)
+
+
 def _enrich_public_metadata(oc) -> None:
     if not _looks_like_public_oc(oc.codigo_oc):
         return
@@ -161,7 +168,7 @@ def _enrich_public_metadata(oc) -> None:
             updated = True
 
     if updated:
-        oc_repository.actualizar_campos_publicos(
+        _actualizar_campos_publicos_compat(
             oc.codigo_oc,
             codigo_licitacion=oc.codigo_licitacion or "",
             direccion_despacho=oc.direccion_despacho or "",
@@ -485,6 +492,10 @@ def export_all(
             oc.cantidad_lineas, oc.notas or "",
         ])
 
+    for row in ws.iter_rows(min_row=2, min_col=10, max_col=12):
+        for cell in row:
+            cell.number_format = '#,##0.####'
+
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -518,8 +529,17 @@ def get_oc(codigo_oc: str):
     oc = oc_repository.get_oc(codigo_oc)
     if not oc:
         raise HTTPException(404, detail=f"OC {codigo_oc} no encontrada")
-    _enrich_public_metadata(oc)
-    lineas = [enrich_linea_for_api(linea, oc.tipo_oc) for linea in oc_repository.get_lineas(codigo_oc)]
+    try:
+        _enrich_public_metadata(oc)
+    except Exception:
+        pass  # non-critical enrichment
+    lineas_raw = oc_repository.get_lineas(codigo_oc)
+    lineas = []
+    for linea in lineas_raw:
+        try:
+            lineas.append(enrich_linea_for_api(linea, oc.tipo_oc))
+        except Exception:
+            lineas.append(linea)
     historial_estados = oc_repository.get_estado_historial(codigo_oc)
     documento = oc_repository.get_document_source(codigo_oc)
     return OcDetailOut(
@@ -673,6 +693,47 @@ def update_notas(codigo_oc: str, body: NotasIn):
     return {"ok": True}
 
 
+@router.post("/{codigo_oc}/refresh-mp-status")
+def refresh_mp_status(codigo_oc: str):
+    codigo = (codigo_oc or "").strip().upper()
+    if not codigo:
+        raise HTTPException(400, detail="Debe indicar un codigo de OC")
+    if not _looks_like_public_oc(codigo):
+        raise HTTPException(400, detail="La actualizacion MP solo aplica a OCs de Mercado Publico")
+
+    cfg = load_config()
+    if not cfg.api_ticket:
+        raise HTTPException(400, detail="API ticket no configurado")
+
+    try:
+        result = refresh_oc_status_from_portal(
+            ticket=cfg.api_ticket,
+            codigo_empresa=cfg.codigo_empresa,
+            codigo_oc=codigo,
+        )
+    except APIError as exc:
+        status_code = 404 if "sin detalle" in str(exc).lower() else 502
+        raise HTTPException(status_code, detail=str(exc))
+    except Exception as exc:
+        logger.exception("No se pudo refrescar estado MP de %s", codigo)
+        raise HTTPException(502, detail=f"No se pudo consultar Mercado Publico: {exc}")
+
+    try:
+        from backend.core.tasks import record_mp_sync_success
+
+        record_mp_sync_success()
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "updated": bool(result.get("updated")),
+        "estado_mp": str(result.get("estado_mp") or ""),
+        "codigo_estado_mp": int(result.get("codigo_estado_mp") or 0),
+        "refreshed_at": datetime.now().isoformat(),
+    }
+
+
 @router.get("/{codigo_oc}/sap-text", response_model=SapTextOut)
 def get_sap_text(codigo_oc: str):
     lineas = oc_repository.get_lineas(codigo_oc)
@@ -752,6 +813,10 @@ def export_excel(codigo_oc: str):
             l.precio_neto, l.precio_sap,
             l.total, l.estado_homologacion,
         ])
+
+    for row in ws.iter_rows(min_row=8, min_col=7, max_col=11):
+        for cell in row:
+            cell.number_format = '#,##0.####'
 
     buf = BytesIO()
     wb.save(buf)
