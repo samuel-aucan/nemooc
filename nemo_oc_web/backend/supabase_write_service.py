@@ -269,7 +269,7 @@ def sync_homologacion(
         }
         set_parts = ", ".join(f"{k} = {_sql_val(v)}" for k, v in fields.items())
         _raw_sql(
-            f"UPDATE oc_detalle SET {set_parts} WHERE oc_id = {oc_id} AND nro_linea = {nro_linea}"
+            f"UPDATE oc_detalle SET {set_parts} WHERE oc_id = '{oc_id}' AND nro_linea = {nro_linea}"
         )
         logger.debug(f"[supabase_write] sync_homologacion {codigo_oc} linea {nro_linea}: OK")
 
