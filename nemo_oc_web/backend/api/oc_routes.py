@@ -36,7 +36,7 @@ from backend.api.sync_routes import GLOBAL_SYNC_LOGS
 from backend.core.auth import get_current_user, get_user_by_id, is_auth_disabled, list_users
 
 from .schemas import (
-    OrdenCompraOut, LineaOCOut, OcDetailOut, StatsOut, FiltrosOut, HoldingFiltroOut,
+    OrdenCompraOut, LineaOCOut, OcDetailOut, OcListResponse, StatsOut, FiltrosOut, HoldingFiltroOut,
     SapTextOut, AsignarItemcodeIn, SapModeIn, SapValuesIn, SapValuesOut, SapValuesHistoryOut,
     EstadoIn, IngresadaIn, ResponsableIn, ResponsableOut, NotasIn, SugerenciaOut, EstadoHistorialOut,
     CatalogImportOut, AnalyticsOut, AnalyticsSummaryOut, AnalyticsDailyPointOut, AnalyticsRankingItemOut, ReviewQueueItemOut,
@@ -261,7 +261,7 @@ def _refresh_single_oc_portal_status(codigo_oc: str) -> bool:
         return False
 
 
-@router.get("", response_model=list[OrdenCompraOut])
+@router.get("", response_model=OcListResponse)
 def list_ocs(
     estado:     List[str] = Query(default=[]),
     estado_mp:  List[str] = Query(default=[]),
@@ -274,8 +274,10 @@ def list_ocs(
     fecha_ingreso_desde: Optional[str] = Query(None),
     fecha_ingreso_hasta: Optional[str] = Query(None),
     busqueda:   Optional[str] = Query(None),
+    limit:      int = Query(50, ge=0, le=500),
+    offset:     int = Query(0, ge=0),
 ):
-    ocs = oc_repository.get_all_ocs(
+    ocs, total = oc_repository.get_all_ocs(
         estado=estado or None,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
@@ -286,12 +288,43 @@ def list_ocs(
         tipo_oc=tipo_oc or None,
         holding=holding or None,
         responsable=responsable or None,
+        limit=limit,
+        offset=offset,
     )
     holdings_map = oc_repository.get_holdings_map()
-    enriched = [OrdenCompraOut(**_enrich_oc(oc, holdings_map)) for oc in ocs]
+
+    cartera_svc = get_cartera_service()
+    cliente_codes = [oc.cliente_sap_sugerido for oc in ocs if oc.cliente_sap_sugerido]
+    clientes_map = cartera_svc.lookup_batch(cliente_codes) if cliente_codes else {}
+
+    enriched = []
+    for oc in ocs:
+        d = oc.__dict__.copy()
+        cliente = clientes_map.get(oc.cliente_sap_sugerido) if oc.cliente_sap_sugerido else None
+        d["cartera"] = cliente.cartera if cliente else ""
+        d["vendedor"] = cliente.vendedor if cliente else ""
+        d["region_nombre"] = cliente.region_nombre if cliente else ""
+        d["razon_social"] = cliente.razon if cliente else ""
+        holding_id = oc.codigo_organismo or ""
+        holding_nombre = holdings_map.get(holding_id, "") if holding_id else ""
+        if oc.tipo_oc == "PRIVADA" and not holding_nombre:
+            try:
+                from app.services.private_holding_service import detect_holding_from_identity
+                detection = detect_holding_from_identity(rut_value=oc.rut_unidad, buyer_name=oc.nombre_organismo)
+                if detection.resolved:
+                    holding_id = holding_id or detection.holding_id
+                    holding_nombre = detection.holding_nombre
+                    d["codigo_organismo"] = holding_id
+            except Exception:
+                pass
+        d["holding_nombre"] = holding_nombre
+        enriched.append(OrdenCompraOut(**d))
+
     if cartera:
         enriched = [o for o in enriched if o.cartera in cartera]
-    return enriched
+        total = len(enriched)
+
+    return OcListResponse(items=enriched, total=total, limit=limit, offset=offset)
 
 
 @router.get("/stats", response_model=StatsOut)
@@ -462,7 +495,7 @@ def export_all(
     import openpyxl
     from io import BytesIO
 
-    ocs = oc_repository.get_all_ocs(
+    ocs, _ = oc_repository.get_all_ocs(
         estado=estado or None, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta,
         busqueda=busqueda, estado_mp=estado_mp or None, tipo_oc=tipo_oc or None,
     )
@@ -526,21 +559,21 @@ def get_responsables():
 
 @router.get("/{codigo_oc}", response_model=OcDetailOut)
 def get_oc(codigo_oc: str):
-    oc = oc_repository.get_oc(codigo_oc)
+    oc, oc_id = oc_repository.get_oc_with_id(codigo_oc)
     if not oc:
         raise HTTPException(404, detail=f"OC {codigo_oc} no encontrada")
     try:
         _enrich_public_metadata(oc)
     except Exception:
-        pass  # non-critical enrichment
-    lineas_raw = oc_repository.get_lineas(codigo_oc)
+        pass
+    lineas_raw = oc_repository.get_lineas(codigo_oc, oc_id=oc_id)
     lineas = []
     for linea in lineas_raw:
         try:
             lineas.append(enrich_linea_for_api(linea, oc.tipo_oc))
         except Exception:
             lineas.append(linea)
-    historial_estados = oc_repository.get_estado_historial(codigo_oc)
+    historial_estados = oc_repository.get_estado_historial(codigo_oc, oc_id=oc_id)
     documento = oc_repository.get_document_source(codigo_oc)
     return OcDetailOut(
         cabecera=OrdenCompraOut(**_enrich_oc(oc)),

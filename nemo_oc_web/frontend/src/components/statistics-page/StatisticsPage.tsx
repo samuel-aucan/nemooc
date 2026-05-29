@@ -1,14 +1,32 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { format, subDays } from 'date-fns'
-import { BarChart3, BrainCircuit, Check, ChevronDown, ExternalLink, Search, Sparkles, Wand2 } from 'lucide-react'
+import {
+  Activity,
+  BarChart3,
+  BrainCircuit,
+  Building2,
+  CalendarCheck,
+  Check,
+  ChevronDown,
+  ExternalLink,
+  FileSearch,
+  Gauge,
+  Landmark,
+  Search,
+  ShieldAlert,
+  Sparkles,
+  Timer,
+  Users,
+  Wand2,
+} from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { searchMaestra } from '../../api/catalogs'
 import { asignarItemcode, getAnalytics, getSugerencias, limpiarAsignacion } from '../../api/ocs'
-import type { AnalyticsResponse, ReviewQueueItem, Sugerencia } from '../../types/oc'
+import type { AnalyticsDailyPoint, AnalyticsRankingItem, AnalyticsResponse, ReviewQueueItem, Sugerencia } from '../../types/oc'
 import { hasSelectedText } from '../../utils/clipboard'
-import { estadoInternoBgClass, fmtDate, fmtMoney, homoBadge } from '../../utils/formatters'
+import { displayOcCode, estadoInternoBgClass, fmtDate, fmtMoney, homoBadge } from '../../utils/formatters'
 
 const today = () => format(new Date(), 'yyyy-MM-dd')
 const ago = (days: number) => format(subDays(new Date(), days), 'yyyy-MM-dd')
@@ -16,6 +34,7 @@ const QUEUE_LIMIT = 220
 
 type QueueMode = 'todos' | 'pendientes' | 'con_sugerencia' | 'manuales' | 'sin_sugerencia'
 type ActiveRange = 'hoy' | '7d' | '30d' | null
+type ControlTab = 'hoy' | 'productividad' | 'homologacion' | 'privadas' | 'auditoria'
 type AssignOrigin = 'sugerencia' | 'manual'
 type AssignPayload = { origin: AssignOrigin; code: string; desc: string }
 
@@ -28,6 +47,7 @@ export default function StatisticsPage() {
   const [search, setSearch] = useState('')
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
   const [solvedThisSession, setSolvedThisSession] = useState(0)
+  const [activeTab, setActiveTab] = useState<ControlTab>('hoy')
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: ['ocs-analytics', fechaDesde, fechaHasta],
@@ -149,6 +169,54 @@ export default function StatisticsPage() {
 
   const totalCola = summary?.total_cola_sin_limite ?? 0
   const queueTruncated = (data?.queue.length ?? 0) >= QUEUE_LIMIT && totalCola > QUEUE_LIMIT
+
+  return (
+    <ControlCenterView
+      data={data}
+      summary={summary}
+      isLoading={isLoading}
+      isFetching={isFetching}
+      fechaDesde={fechaDesde}
+      fechaHasta={fechaHasta}
+      activeRange={activeRange}
+      activeTab={activeTab}
+      queueMode={queueMode}
+      search={search}
+      filteredQueue={filteredQueue}
+      expandedKey={expandedKey}
+      solvedThisSession={solvedThisSession}
+      queueTruncated={queueTruncated}
+      totalCola={totalCola}
+      onFechaDesde={(value) => {
+        setFechaDesde(value)
+        setActiveRange(null)
+      }}
+      onFechaHasta={(value) => {
+        setFechaHasta(value)
+        setActiveRange(null)
+      }}
+      onQuickRange={(range) => {
+        if (range === 'hoy') {
+          setFechaDesde(today())
+          setFechaHasta(today())
+        }
+        if (range === '7d') {
+          setFechaDesde(ago(7))
+          setFechaHasta(today())
+        }
+        if (range === '30d') {
+          setFechaDesde(ago(30))
+          setFechaHasta(today())
+        }
+        setActiveRange(range)
+      }}
+      onActiveTab={setActiveTab}
+      onQueueMode={setQueueMode}
+      onSearch={setSearch}
+      onExpandedKey={setExpandedKey}
+      onAssigned={handleAssigned}
+    />
+  )
 
   return (
     <div className="page-shell">
@@ -286,6 +354,45 @@ export default function StatisticsPage() {
       </section>
 
       <section className="card">
+        <div className="card-header">
+          <BarChart3 size={15} className="text-accent" />
+          Flujo y concentracion
+        </div>
+        <div className="card-body grid grid-cols-1 gap-4 2xl:grid-cols-2">
+          <DailyFlowPanel
+            title="OCs recibidas por dia"
+            subtitle="Basado en fecha de envio dentro de la ventana seleccionada."
+            data={data?.received_by_day ?? []}
+            colorClass="bg-blue-400"
+            emptyLabel="No hay OCs recibidas en este rango."
+          />
+          <DailyFlowPanel
+            title="OCs ingresadas por dia"
+            subtitle="Basado en fecha de ingreso SAP dentro de la ventana seleccionada."
+            data={data?.entered_by_day ?? []}
+            colorClass="bg-emerald-400"
+            emptyLabel="No hay OCs ingresadas en este rango."
+          />
+          <RankingPanel
+            title="Clientes SAP con mas monto"
+            subtitle="Ranking por monto total de OCs recibidas en la ventana."
+            data={data?.top_clients ?? []}
+            icon={<Building2 size={15} className="text-blue-300" />}
+            colorClass="bg-blue-400"
+            emptyLabel="Todavia no hay clientes SAP para mostrar."
+          />
+          <RankingPanel
+            title="Compradores con mas monto"
+            subtitle="Organismos con mayor monto acumulado en la ventana."
+            data={data?.top_buyers ?? []}
+            icon={<Landmark size={15} className="text-emerald-300" />}
+            colorClass="bg-emerald-400"
+            emptyLabel="Todavia no hay compradores para mostrar."
+          />
+        </div>
+      </section>
+
+      <section className="card">
         <div className="card-header flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Sparkles size={15} className="text-accent" />
@@ -378,6 +485,583 @@ export default function StatisticsPage() {
   )
 }
 
+function ControlCenterView({
+  data,
+  summary,
+  isLoading,
+  isFetching,
+  fechaDesde,
+  fechaHasta,
+  activeRange,
+  activeTab,
+  queueMode,
+  search,
+  filteredQueue,
+  expandedKey,
+  solvedThisSession,
+  queueTruncated,
+  totalCola,
+  onFechaDesde,
+  onFechaHasta,
+  onQuickRange,
+  onActiveTab,
+  onQueueMode,
+  onSearch,
+  onExpandedKey,
+  onAssigned,
+}: {
+  data?: AnalyticsResponse
+  summary?: AnalyticsResponse['summary']
+  isLoading: boolean
+  isFetching: boolean
+  fechaDesde: string
+  fechaHasta: string
+  activeRange: ActiveRange
+  activeTab: ControlTab
+  queueMode: QueueMode
+  search: string
+  filteredQueue: ReviewQueueItem[]
+  expandedKey: string | null
+  solvedThisSession: number
+  queueTruncated: boolean
+  totalCola: number
+  onFechaDesde: (value: string) => void
+  onFechaHasta: (value: string) => void
+  onQuickRange: (range: Exclude<ActiveRange, null>) => void
+  onActiveTab: (tab: ControlTab) => void
+  onQueueMode: (mode: QueueMode) => void
+  onSearch: (value: string) => void
+  onExpandedKey: (value: string | null) => void
+  onAssigned: (rowKey: string, assignment: AssignPayload) => void
+}) {
+  const todayKpi = data?.productividad_hoy
+  const privadas = data?.privadas
+  const aging = data?.aging
+  const salud = data?.salud_sync
+  const productividadUsuarios = data?.productividad_usuarios ?? []
+  const funnel = data?.funnel ?? []
+  const topBlockers = data?.top_blockers ?? []
+
+  return (
+    <div className="page-shell">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Centro de Control</h1>
+          <p className="text-xs text-gray-600">
+            Operacion diaria, productividad SAP, backlog, privadas y calidad de homologacion.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <QuickRangeButton label="Hoy" active={activeRange === 'hoy'} onClick={() => onQuickRange('hoy')} />
+          <QuickRangeButton label="7 dias" active={activeRange === '7d'} onClick={() => onQuickRange('7d')} />
+          <QuickRangeButton label="30 dias" active={activeRange === '30d'} onClick={() => onQuickRange('30d')} />
+        </div>
+      </div>
+
+      <section className="card">
+        <div className="card-header">
+          <CalendarCheck size={15} className="text-accent" />
+          Ventana de control
+        </div>
+        <div className="card-body space-y-4">
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1fr_1fr_auto]">
+            <label className="block">
+              <span className="label">Fecha desde</span>
+              <input type="date" className="input" value={fechaDesde} onChange={(event) => onFechaDesde(event.target.value)} />
+            </label>
+            <label className="block">
+              <span className="label">Fecha hasta</span>
+              <input type="date" className="input" value={fechaHasta} onChange={(event) => onFechaHasta(event.target.value)} />
+            </label>
+            <div className="flex items-end">
+              <div className="rounded-xl border border-gray-800 bg-gray-950/60 px-4 py-3 text-sm text-gray-400">
+                {isFetching ? 'Actualizando KPIs...' : 'Los indicadores abren la bandeja filtrada cuando corresponde.'}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <ControlTabButton label="Hoy" active={activeTab === 'hoy'} onClick={() => onActiveTab('hoy')} icon={<Gauge size={14} />} />
+            <ControlTabButton label="Productividad" active={activeTab === 'productividad'} onClick={() => onActiveTab('productividad')} icon={<Users size={14} />} />
+            <ControlTabButton label="Homologacion" active={activeTab === 'homologacion'} onClick={() => onActiveTab('homologacion')} icon={<BrainCircuit size={14} />} />
+            <ControlTabButton label="Privadas" active={activeTab === 'privadas'} onClick={() => onActiveTab('privadas')} icon={<FileSearch size={14} />} />
+            <ControlTabButton label="Auditoria" active={activeTab === 'auditoria'} onClick={() => onActiveTab('auditoria')} icon={<ShieldAlert size={14} />} />
+          </div>
+        </div>
+      </section>
+
+      {activeTab === 'hoy' && (
+        <>
+          <section className="card">
+            <div className="card-header">
+              <Activity size={15} className="text-accent" />
+              Hoy
+            </div>
+            <div className="card-body space-y-4">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <MetricLink
+                  icon={<CalendarCheck size={16} />}
+                  label="Llegaron hoy"
+                  value={todayKpi?.recibidas_ocs ?? 0}
+                  helper={`${todayKpi?.recibidas_lineas ?? 0} lineas | ${fmtMoney(todayKpi?.recibidas_monto ?? 0)}`}
+                  to={buildOcListUrl({ fecha_desde: today(), fecha_hasta: today() })}
+                />
+                <MetricLink
+                  icon={<Check size={16} />}
+                  label="Ingresadas hoy"
+                  value={todayKpi?.ingresadas_ocs ?? 0}
+                  helper={`${todayKpi?.ingresadas_lineas ?? 0} lineas | ${fmtMoney(todayKpi?.ingresadas_monto ?? 0)}`}
+                  tone="emerald"
+                  to={buildOcListUrl({ estado: ['Ingresada'], fecha_ingreso_desde: today(), fecha_ingreso_hasta: today() })}
+                />
+                <MetricLink
+                  icon={<Gauge size={16} />}
+                  label="Same-day"
+                  value={`${todayKpi?.same_day_ratio_pct ?? 0}%`}
+                  helper={`${todayKpi?.same_day_ocs ?? 0} OC del dia ingresadas hoy`}
+                  tone="blue"
+                />
+                <MetricLink
+                  icon={<Timer size={16} />}
+                  label="Backlog neto"
+                  value={signedNumber(todayKpi?.backlog_neto ?? 0)}
+                  helper={`${todayKpi?.throughput_pct ?? 0}% throughput diario`}
+                  tone={(todayKpi?.backlog_neto ?? 0) <= 0 ? 'emerald' : 'amber'}
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <MetricStrip label="Listas para SAP" value={`${todayKpi?.listas_sap ?? 0}`} helper="Sin ingreso SAP todavia" />
+                <MetricStrip label="Bloqueadas" value={`${todayKpi?.bloqueadas ?? 0}`} helper="Falta homologacion o revision" />
+                <MetricStrip label="Aceptadas sin ingresar" value={`${todayKpi?.aceptadas_sin_ingresar ?? 0}`} helper="Riesgo MP vs SAP" />
+              </div>
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="card-header">
+              <BarChart3 size={15} className="text-accent" />
+              Flujo
+            </div>
+            <div className="card-body grid grid-cols-1 gap-4 2xl:grid-cols-2">
+              <DailyFlowPanel
+                title="OCs recibidas por dia"
+                subtitle="Basado en fecha de envio dentro de la ventana seleccionada."
+                data={data?.received_by_day ?? []}
+                colorClass="bg-blue-400"
+                emptyLabel="No hay OCs recibidas en este rango."
+              />
+              <DailyFlowPanel
+                title="OCs ingresadas por dia"
+                subtitle="Basado en fecha de ingreso SAP dentro de la ventana seleccionada."
+                data={data?.entered_by_day ?? []}
+                colorClass="bg-emerald-400"
+                emptyLabel="No hay OCs ingresadas en este rango."
+              />
+            </div>
+          </section>
+        </>
+      )}
+
+      {activeTab === 'productividad' && (
+        <section className="card">
+          <div className="card-header">
+            <Users size={15} className="text-accent" />
+            Productividad por usuario
+          </div>
+          <div className="card-body">
+            <div className="overflow-auto rounded-2xl border border-gray-800 bg-gray-950/60">
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th>Usuario</th>
+                    <th>Asignadas</th>
+                    <th>Recibidas hoy</th>
+                    <th>Ingresadas hoy</th>
+                    <th>Same-day</th>
+                    <th>Ingresadas rango</th>
+                    <th>Lineas</th>
+                    <th>Monto</th>
+                    <th>Privadas</th>
+                    <th>Globales</th>
+                    <th>Backlog</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {productividadUsuarios.map((user) => (
+                    <tr key={`${user.user_id ?? 'na'}-${user.username}`}>
+                      <td>
+                        <Link
+                          className="font-medium text-blue-300 hover:text-blue-200"
+                          to={buildOcListUrl({ responsable: [user.user_id === null ? '__sin_responsable__' : user.username] })}
+                        >
+                          {user.username}
+                        </Link>
+                      </td>
+                      <td>{user.ocs_asignadas}</td>
+                      <td>{user.recibidas_hoy_asignadas}</td>
+                      <td>{user.ingresadas_hoy}</td>
+                      <td className="font-medium text-gray-100">{user.same_day_ratio_pct}%</td>
+                      <td>{user.ingresadas_total_rango}</td>
+                      <td>{user.lineas_ingresadas}</td>
+                      <td>{fmtMoney(user.monto_ingresado)}</td>
+                      <td>{user.privadas_ingresadas}</td>
+                      <td>{user.acuerdos_globales_ingresados}</td>
+                      <td className={user.backlog_pendiente > 0 ? 'text-amber-300' : 'text-emerald-300'}>{user.backlog_pendiente}</td>
+                    </tr>
+                  ))}
+                  {!isLoading && productividadUsuarios.length === 0 && (
+                    <tr>
+                      <td colSpan={11} className="px-4 py-8 text-center text-sm text-gray-500">
+                        Aun no hay productividad trazable para esta ventana.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {activeTab === 'homologacion' && (
+        <>
+          <section className="card">
+            <div className="card-header">
+              <BrainCircuit size={15} className="text-accent" />
+              Calidad de homologacion
+            </div>
+            <div className="card-body space-y-4">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <MetricLink icon={<Sparkles size={16} />} label="Cobertura lineas" value={`${summary?.cobertura_lineas_pct ?? 0}%`} helper={`${summary?.lineas_resueltas ?? 0} de ${summary?.total_lineas ?? 0}`} tone="emerald" />
+                <MetricLink icon={<BarChart3 size={16} />} label="Cobertura monto" value={`${summary?.cobertura_monto_pct ?? 0}%`} helper={fmtMoney(summary?.monto_resuelto ?? 0)} tone="blue" />
+                <MetricLink icon={<Wand2 size={16} />} label="Pendientes" value={summary?.lineas_pendientes ?? 0} helper="Sin itemcode final" tone="amber" onClick={() => onQueueMode('pendientes')} />
+                <MetricLink icon={<BrainCircuit size={16} />} label="Manuales" value={summary?.lineas_manuales ?? 0} helper="Corregidas por usuario" />
+              </div>
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                <RankingPanel title="Clientes SAP con mas monto" subtitle="Ranking por monto total de OCs recibidas en la ventana." data={data?.top_clients ?? []} icon={<Building2 size={15} className="text-blue-300" />} colorClass="bg-blue-400" emptyLabel="Todavia no hay clientes SAP para mostrar." />
+                <TopBlockersPanel data={topBlockers} />
+              </div>
+            </div>
+          </section>
+          <QueueSection
+            isLoading={isLoading}
+            filteredQueue={filteredQueue}
+            queueMode={queueMode}
+            search={search}
+            expandedKey={expandedKey}
+            solvedThisSession={solvedThisSession}
+            queueTruncated={queueTruncated}
+            totalCola={totalCola}
+            onQueueMode={onQueueMode}
+            onSearch={onSearch}
+            onExpandedKey={onExpandedKey}
+            onAssigned={onAssigned}
+          />
+        </>
+      )}
+
+      {activeTab === 'privadas' && (
+        <section className="card">
+          <div className="card-header">
+            <FileSearch size={15} className="text-accent" />
+            Privadas y salud del sistema
+          </div>
+          <div className="card-body space-y-4">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <MetricLink icon={<FileSearch size={16} />} label="Privadas recibidas" value={privadas?.recibidas ?? 0} helper="En la ventana seleccionada" />
+              <MetricLink icon={<ShieldAlert size={16} />} label="Requieren revision" value={privadas?.requieren_revision ?? 0} helper="Alertas de parser/precio" tone="amber" />
+              <MetricLink icon={<Wand2 size={16} />} label="Parser fallido" value={privadas?.parser_fallido ?? 0} helper="Sin parser o con error" tone="amber" />
+              <MetricLink icon={<FileSearch size={16} />} label="PDF recuperable" value={privadas?.pdf_recuperable ?? 0} helper="Disponible bajo demanda" tone="emerald" />
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <MetricStrip label="Sync corriendo" value={salud?.running ? 'Si' : 'No'} helper={`${salud?.active_tasks?.length ?? 0} tarea(s) activas`} />
+              <MetricStrip label="Ultimo MP" value={formatDateTime(salud?.last_mp_sync_at || '') || 'Sin dato'} helper="Sincronizacion completa/estado" />
+              <MetricStrip label="Proximo ciclo" value={formatDateTime(salud?.next_sync_at || '') || 'Sin agenda'} helper="MP, privado o suave" />
+              <MetricStrip label="Errores recientes" value={`${salud?.errores_recientes ?? 0}`} helper="Ultimos eventos de actividad" />
+            </div>
+          </div>
+        </section>
+      )}
+
+      {activeTab === 'auditoria' && (
+        <section className="card">
+          <div className="card-header">
+            <ShieldAlert size={15} className="text-accent" />
+            Auditoria, SLA y embudo
+          </div>
+          <div className="card-body grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <FunnelPanel data={funnel} />
+            <AgingPanel title="Listas para SAP" data={aging?.listas_sap ?? []} />
+            <AgingPanel title="Bloqueadas" data={aging?.bloqueadas ?? []} />
+            <AgingPanel title="Aceptadas sin ingresar" data={aging?.aceptadas_sin_ingresar ?? []} />
+          </div>
+        </section>
+      )}
+    </div>
+  )
+}
+
+function buildOcListUrl(params: {
+  estado?: string[]
+  estado_mp?: string[]
+  tipo_oc?: string[]
+  responsable?: string[]
+  fecha_desde?: string
+  fecha_hasta?: string
+  fecha_ingreso_desde?: string
+  fecha_ingreso_hasta?: string
+  busqueda?: string
+}) {
+  const search = new URLSearchParams()
+  params.estado?.forEach((value) => search.append('estado', value))
+  params.estado_mp?.forEach((value) => search.append('estado_mp', value))
+  params.tipo_oc?.forEach((value) => search.append('tipo_oc', value))
+  params.responsable?.forEach((value) => search.append('responsable', value))
+  if (params.fecha_desde) search.set('fecha_desde', params.fecha_desde)
+  if (params.fecha_hasta) search.set('fecha_hasta', params.fecha_hasta)
+  if (params.fecha_ingreso_desde) search.set('fecha_ingreso_desde', params.fecha_ingreso_desde)
+  if (params.fecha_ingreso_hasta) search.set('fecha_ingreso_hasta', params.fecha_ingreso_hasta)
+  if (params.busqueda) search.set('busqueda', params.busqueda)
+  const query = search.toString()
+  return query ? `/?${query}` : '/'
+}
+
+function signedNumber(value: number) {
+  if (value > 0) return `+${value}`
+  return String(value)
+}
+
+function formatDateTime(value: string) {
+  if (!value) return ''
+  const utcValue = value.endsWith('Z') || value.includes('+') ? value : value + 'Z'
+  const parsed = new Date(utcValue)
+  if (Number.isNaN(parsed.getTime())) return value
+  return parsed.toLocaleString('es-CL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function ControlTabButton({ label, active, onClick, icon }: { label: string; active: boolean; onClick: () => void; icon: ReactNode }) {
+  return (
+    <button
+      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-colors ${
+        active
+          ? 'border-accent text-accent'
+          : 'border-gray-800 bg-gray-950/70 text-gray-400 hover:border-gray-700 hover:text-gray-200'
+      }`}
+      onClick={onClick}
+      style={active ? { backgroundColor: 'rgba(var(--accent-500), 0.12)' } : undefined}
+    >
+      {icon}
+      {label}
+    </button>
+  )
+}
+
+function MetricLink({
+  icon,
+  label,
+  value,
+  helper,
+  tone = 'default',
+  to,
+  onClick,
+}: {
+  icon: ReactNode
+  label: string
+  value: number | string
+  helper: string
+  tone?: 'default' | 'emerald' | 'amber' | 'blue'
+  to?: string
+  onClick?: () => void
+}) {
+  const content = (
+    <MetricCard icon={icon} label={label} value={value} helper={helper} tone={tone} onClick={onClick} />
+  )
+  return to ? <Link to={to}>{content}</Link> : content
+}
+
+function QueueSection({
+  isLoading,
+  filteredQueue,
+  queueMode,
+  search,
+  expandedKey,
+  solvedThisSession,
+  queueTruncated,
+  totalCola,
+  onQueueMode,
+  onSearch,
+  onExpandedKey,
+  onAssigned,
+}: {
+  isLoading: boolean
+  filteredQueue: ReviewQueueItem[]
+  queueMode: QueueMode
+  search: string
+  expandedKey: string | null
+  solvedThisSession: number
+  queueTruncated: boolean
+  totalCola: number
+  onQueueMode: (mode: QueueMode) => void
+  onSearch: (value: string) => void
+  onExpandedKey: (value: string | null) => void
+  onAssigned: (rowKey: string, assignment: AssignPayload) => void
+}) {
+  return (
+    <section className="card">
+      <div className="card-header flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Sparkles size={15} className="text-accent" />
+          Cola de sugerencias y correcciones
+        </div>
+        <div className="flex items-center gap-3 text-xs text-gray-500">
+          {isLoading ? 'Cargando...' : `${filteredQueue.length} linea(s) visibles`}
+          {solvedThisSession > 0 && (
+            <span className="font-medium text-emerald-400">{solvedThisSession} resuelta(s) esta sesion</span>
+          )}
+        </div>
+      </div>
+      <div className="card-body space-y-4">
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[1.1fr_auto]">
+          <div className="relative">
+            <Search size={15} className="pointer-events-none absolute left-3 top-3 text-gray-500" />
+            <input
+              className="input pl-9"
+              value={search}
+              onChange={(event) => onSearch(event.target.value)}
+              placeholder="Buscar por OC, comprador, itemcode o descripcion..."
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <QueueModeButton label="Pendientes" active={queueMode === 'pendientes'} onClick={() => onQueueMode('pendientes')} />
+            <QueueModeButton label="Con sugerencia" active={queueMode === 'con_sugerencia'} onClick={() => onQueueMode('con_sugerencia')} />
+            <QueueModeButton label="Sin sugerencia" active={queueMode === 'sin_sugerencia'} onClick={() => onQueueMode('sin_sugerencia')} />
+            <QueueModeButton label="Revisadas" active={queueMode === 'manuales'} onClick={() => onQueueMode('manuales')} />
+            <QueueModeButton label="Todos" active={queueMode === 'todos'} onClick={() => onQueueMode('todos')} />
+          </div>
+        </div>
+
+        {queueTruncated && (
+          <div className="rounded-xl border border-amber-800/40 bg-amber-950/15 px-4 py-2.5 text-xs text-amber-200">
+            Mostrando {QUEUE_LIMIT} de {totalCola} lineas en cola. Ajusta el rango de fechas para trabajar el resto.
+          </div>
+        )}
+
+        <div className="rounded-2xl border border-gray-800 bg-gray-950/60">
+          <div className="max-h-[70vh] overflow-auto">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th className="w-12"></th>
+                  <th>OC</th>
+                  <th>Comprador</th>
+                  <th>Detalle linea</th>
+                  <th>Sugerencia / asignacion</th>
+                  <th>Estado</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredQueue.map((item) => {
+                  const rowKey = `${item.codigo_oc}-${item.correlativo}`
+                  const expanded = expandedKey === rowKey
+                  return (
+                    <ExpertQueueRow
+                      key={rowKey}
+                      item={item}
+                      expanded={expanded}
+                      onToggle={() => onExpandedKey(expanded ? null : rowKey)}
+                      onAssigned={(assignment) => onAssigned(rowKey, assignment)}
+                    />
+                  )
+                })}
+
+                {!isLoading && filteredQueue.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-500">
+                      No hay lineas para esta vista. Prueba otro rango o cambia el filtro de revision.
+                    </td>
+                  </tr>
+                )}
+
+                {isLoading && (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-8 text-center text-sm text-gray-500">
+                      Cargando estadisticas y cola de trabajo...
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function TopBlockersPanel({ data }: { data: Array<{ label: string; cantidad_lineas: number; cantidad_ocs: number; monto_total: number }> }) {
+  return (
+    <div className="rounded-2xl border border-gray-800 bg-gray-950/55 px-4 py-4">
+      <div className="text-sm font-semibold text-gray-100">Productos que mas bloquean</div>
+      <div className="mt-1 text-xs leading-5 text-gray-500">Lineas pendientes agrupadas por descripcion.</div>
+      <div className="mt-4 space-y-2">
+        {data.slice(0, 8).map((item, index) => (
+          <div key={`${item.label}-${index}`} className="rounded-xl border border-gray-800/80 bg-gray-900/40 px-3 py-3">
+            <div className="truncate text-sm font-medium text-gray-100" title={item.label}>{item.label}</div>
+            <div className="mt-1 text-xs text-gray-500">
+              {item.cantidad_lineas} linea(s) | {item.cantidad_ocs} OC | {fmtMoney(item.monto_total)}
+            </div>
+          </div>
+        ))}
+        {data.length === 0 && <div className="text-sm text-gray-500">Sin bloqueos en esta ventana.</div>}
+      </div>
+    </div>
+  )
+}
+
+function AgingPanel({ title, data }: { title: string; data: Array<{ bucket: string; cantidad_ocs: number; monto_total: number }> }) {
+  return (
+    <div className="rounded-2xl border border-gray-800 bg-gray-950/55 px-4 py-4">
+      <div className="text-sm font-semibold text-gray-100">{title}</div>
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        {data.map((bucket) => (
+          <div key={bucket.bucket} className="rounded-xl border border-gray-800 bg-gray-900/40 px-3 py-3">
+            <div className="text-xs text-gray-500">{bucket.bucket}</div>
+            <div className="mt-1 text-xl font-semibold text-gray-100">{bucket.cantidad_ocs}</div>
+            <div className="mt-1 text-xs text-gray-500">{fmtMoney(bucket.monto_total)}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function FunnelPanel({ data }: { data: Array<{ stage: string; label: string; cantidad_ocs: number; monto_total: number }> }) {
+  const max = data.reduce((acc, item) => Math.max(acc, item.cantidad_ocs), 0) || 1
+  return (
+    <div className="rounded-2xl border border-gray-800 bg-gray-950/55 px-4 py-4">
+      <div className="text-sm font-semibold text-gray-100">Embudo operativo</div>
+      <div className="mt-4 space-y-2">
+        {data.map((item) => {
+          const widthPct = Math.max(8, (item.cantidad_ocs / max) * 100)
+          return (
+            <div key={item.stage} className="rounded-xl border border-gray-800/80 bg-gray-900/40 px-3 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-medium text-gray-100">{item.label}</div>
+                <div className="text-sm text-gray-300">{item.cantidad_ocs} OC</div>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-gray-800">
+                <div className="h-full rounded-full bg-cyan-400" style={{ width: `${widthPct}%` }} />
+              </div>
+              <div className="mt-1 text-xs text-gray-500">{fmtMoney(item.monto_total)}</div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function ExpertQueueRow({
   item,
   expanded,
@@ -436,7 +1120,7 @@ function ExpertQueueRow({
         </td>
         <td className="min-w-[150px]">
           <div className="space-y-1">
-            <div className="font-medium text-gray-100">{item.codigo_oc}</div>
+            <div className="font-medium text-gray-100">{displayOcCode(item.codigo_oc, item.tipo_oc)}</div>
             <div className="text-xs text-gray-500">
               {fmtDate(item.fecha_envio)} | linea {item.correlativo} | {item.tipo_oc}
             </div>
@@ -603,7 +1287,7 @@ function InlineCorrectionRow({
           <div className="flex flex-wrap items-center gap-4 rounded-xl border border-gray-800 bg-gray-950/60 px-4 py-3 text-sm">
             <div>
               <span className="text-xs text-gray-500">OC </span>
-              <span className="font-medium text-gray-100">{item.codigo_oc}</span>
+              <span className="font-medium text-gray-100">{displayOcCode(item.codigo_oc, item.tipo_oc)}</span>
             </div>
             <div>
               <span className="text-xs text-gray-500">Estado </span>
@@ -798,6 +1482,134 @@ function MetricStrip({ label, value, helper }: { label: string; value: string; h
       <div className="text-[11px] uppercase tracking-[0.12em] text-gray-500">{label}</div>
       <div className="mt-2 text-lg font-semibold text-gray-100">{value}</div>
       <div className="mt-1 text-xs text-gray-500">{helper}</div>
+    </div>
+  )
+}
+
+function DailyFlowPanel({
+  title,
+  subtitle,
+  data,
+  colorClass,
+  emptyLabel,
+}: {
+  title: string
+  subtitle: string
+  data: AnalyticsDailyPoint[]
+  colorClass: string
+  emptyLabel: string
+}) {
+  const rows = [...data].sort((a, b) => b.fecha.localeCompare(a.fecha))
+  const totalCount = rows.reduce((acc, row) => acc + row.cantidad_ocs, 0)
+  const totalAmount = rows.reduce((acc, row) => acc + row.monto_total, 0)
+  const maxCount = rows.reduce((acc, row) => Math.max(acc, row.cantidad_ocs), 0) || 1
+
+  return (
+    <div className="rounded-2xl border border-gray-800 bg-gray-950/55 px-4 py-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-gray-100">{title}</div>
+          <div className="mt-1 text-xs leading-5 text-gray-500">{subtitle}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-lg font-semibold text-gray-100">{totalCount.toLocaleString('es-CL')}</div>
+          <div className="text-xs text-gray-500">{fmtMoney(totalAmount)}</div>
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="mt-4 rounded-xl border border-gray-800 bg-gray-900/50 px-4 py-4 text-sm text-gray-500">
+          {emptyLabel}
+        </div>
+      ) : (
+        <div className="mt-4 max-h-[320px] space-y-2 overflow-auto pr-1">
+          {rows.map((row) => {
+            const widthPct = Math.max(6, (row.cantidad_ocs / maxCount) * 100)
+            return (
+              <div key={row.fecha} className="rounded-xl border border-gray-800/80 bg-gray-900/40 px-3 py-2.5">
+                <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+                  <div className="font-medium text-gray-200">{fmtDate(row.fecha)}</div>
+                  <div className="text-gray-400">
+                    {row.cantidad_ocs.toLocaleString('es-CL')} OCs
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-800">
+                    <div className={`h-full rounded-full ${colorClass}`} style={{ width: `${widthPct}%` }} />
+                  </div>
+                  <div className="w-[110px] text-right text-xs text-gray-400">{fmtMoney(row.monto_total)}</div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RankingPanel({
+  title,
+  subtitle,
+  data,
+  icon,
+  colorClass,
+  emptyLabel,
+}: {
+  title: string
+  subtitle: string
+  data: AnalyticsRankingItem[]
+  icon: ReactNode
+  colorClass: string
+  emptyLabel: string
+}) {
+  const rows = [...data]
+  const totalAmount = rows.reduce((acc, row) => acc + row.monto_total, 0)
+  const maxAmount = rows.reduce((acc, row) => Math.max(acc, row.monto_total), 0) || 1
+
+  return (
+    <div className="rounded-2xl border border-gray-800 bg-gray-950/55 px-4 py-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-semibold text-gray-100">
+            {icon}
+            {title}
+          </div>
+          <div className="mt-1 text-xs leading-5 text-gray-500">{subtitle}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-lg font-semibold text-gray-100">{rows.length}</div>
+          <div className="text-xs text-gray-500">{fmtMoney(totalAmount)}</div>
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="mt-4 rounded-xl border border-gray-800 bg-gray-900/50 px-4 py-4 text-sm text-gray-500">
+          {emptyLabel}
+        </div>
+      ) : (
+        <div className="mt-4 space-y-2">
+          {rows.map((row, index) => {
+            const widthPct = Math.max(8, (row.monto_total / maxAmount) * 100)
+            return (
+              <div key={`${row.label}-${index}`} className="rounded-xl border border-gray-800/80 bg-gray-900/40 px-3 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-gray-100">{row.label}</div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      {row.cantidad_ocs.toLocaleString('es-CL')} OCs
+                    </div>
+                  </div>
+                  <div className="shrink-0 text-right text-sm font-medium text-gray-200">{fmtMoney(row.monto_total)}</div>
+                </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-gray-800">
+                  <div className={`h-full rounded-full ${colorClass}`} style={{ width: `${widthPct}%` }} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

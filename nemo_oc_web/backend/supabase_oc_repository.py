@@ -200,7 +200,19 @@ def get_oc(codigo_oc: str) -> Optional[OrdenCompra]:
         return None
 
 
-def get_all_ocs(
+def get_oc_with_id(codigo_oc: str) -> tuple[Optional[OrdenCompra], Optional[str]]:
+    """Retorna (oc, oc_uuid) para evitar re-queries de _get_oc_id()."""
+    try:
+        rows = _raw_sql("SELECT * FROM oc_cabecera WHERE codigo_oc = %s LIMIT 1", [codigo_oc])
+        if not rows:
+            return None, None
+        return _row_to_oc(rows[0]), rows[0].get("id")
+    except Exception as e:
+        logger.error(f"[supa_repo] get_oc_with_id({codigo_oc}): {e}")
+        return None, None
+
+
+def _build_oc_where(
     estado=None,
     fecha_desde: Optional[str] = None,
     fecha_hasta: Optional[str] = None,
@@ -211,15 +223,13 @@ def get_all_ocs(
     tipo_oc=None,
     holding=None,
     responsable=None,
-) -> List[OrdenCompra]:
-    """Retorna lista de OC segun filtros. Para filtros complejos usa SQL raw."""
-
-    # Construir SQL con los mismos filtros que el repo SQLite
-    sql = "SELECT * FROM oc_cabecera WHERE 1=1"
+) -> tuple[str, list]:
+    """Construye la clausula WHERE para queries de oc_cabecera."""
+    where = "WHERE 1=1"
     params: list = []
 
     def _add_in(col: str, value) -> None:
-        nonlocal sql
+        nonlocal where
         if not value:
             return
         vals = [value] if isinstance(value, str) else list(value)
@@ -227,7 +237,7 @@ def get_all_ocs(
         if not vals:
             return
         placeholders = ", ".join(["%s"] * len(vals))
-        sql += f" AND {col} IN ({placeholders})"
+        where += f" AND {col} IN ({placeholders})"
         params.extend(vals)
 
     _add_in("estado_interno", estado)
@@ -251,33 +261,68 @@ def get_all_ocs(
                 clauses.append(f"responsable_ingreso_username IN ({ph})")
                 params.extend(normal_vals)
             if clauses:
-                sql += f" AND ({' OR '.join(clauses)})"
+                where += f" AND ({' OR '.join(clauses)})"
 
     if fecha_desde:
-        sql += " AND DATE(COALESCE(NULLIF(TRIM(fecha_envio::text), ''), created_at::text)) >= DATE(%s)"
+        where += " AND DATE(COALESCE(NULLIF(TRIM(fecha_envio::text), ''), created_at::text)) >= DATE(%s)"
         params.append(fecha_desde)
     if fecha_hasta:
-        sql += " AND DATE(COALESCE(NULLIF(TRIM(fecha_envio::text), ''), created_at::text)) <= DATE(%s)"
+        where += " AND DATE(COALESCE(NULLIF(TRIM(fecha_envio::text), ''), created_at::text)) <= DATE(%s)"
         params.append(fecha_hasta)
     if fecha_ingreso_desde:
-        sql += " AND DATE(fecha_ingreso) >= DATE(%s)"
+        where += " AND DATE(fecha_ingreso) >= DATE(%s)"
         params.append(fecha_ingreso_desde)
     if fecha_ingreso_hasta:
-        sql += " AND DATE(fecha_ingreso) <= DATE(%s)"
+        where += " AND DATE(fecha_ingreso) <= DATE(%s)"
         params.append(fecha_ingreso_hasta)
     if busqueda:
         like = f"%{busqueda}%"
-        sql += " AND (codigo_oc ILIKE %s OR nombre_organismo ILIKE %s OR cliente_sap_sugerido ILIKE %s)"
+        where += " AND (codigo_oc ILIKE %s OR nombre_organismo ILIKE %s OR cliente_sap_sugerido ILIKE %s)"
         params.extend([like, like, like])
 
-    sql += " ORDER BY COALESCE(NULLIF(TRIM(fecha_envio::text), ''), created_at::text) DESC"
+    return where, params
+
+
+def get_all_ocs(
+    estado=None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    fecha_ingreso_desde: Optional[str] = None,
+    fecha_ingreso_hasta: Optional[str] = None,
+    busqueda: Optional[str] = None,
+    estado_mp=None,
+    tipo_oc=None,
+    holding=None,
+    responsable=None,
+    limit: int = 0,
+    offset: int = 0,
+) -> tuple[List[OrdenCompra], int]:
+    """Retorna (ocs, total_count). Si limit=0 retorna todas (sin paginacion)."""
+
+    where, params = _build_oc_where(
+        estado=estado, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta,
+        fecha_ingreso_desde=fecha_ingreso_desde, fecha_ingreso_hasta=fecha_ingreso_hasta,
+        busqueda=busqueda, estado_mp=estado_mp, tipo_oc=tipo_oc,
+        holding=holding, responsable=responsable,
+    )
+
+    order = " ORDER BY COALESCE(NULLIF(TRIM(fecha_envio::text), ''), created_at::text) DESC"
 
     try:
-        rows = _raw_sql(sql, params or None)
-        return [_row_to_oc(r) for r in rows]
+        count_rows = _raw_sql(f"SELECT COUNT(*) AS total FROM oc_cabecera {where}", params[:] if params else None)
+        total = int(count_rows[0]["total"]) if count_rows else 0
+
+        sql = f"SELECT * FROM oc_cabecera {where}{order}"
+        query_params = params[:]
+        if limit > 0:
+            sql += " LIMIT %s OFFSET %s"
+            query_params.extend([limit, offset])
+
+        rows = _raw_sql(sql, query_params or None)
+        return [_row_to_oc(r) for r in rows], total
     except Exception as e:
         logger.error(f"[supa_repo] get_all_ocs error: {e}")
-        return []
+        return [], 0
 
 
 def get_distinct_estados_mp() -> List[str]:
@@ -304,13 +349,24 @@ def get_distinct_tipos() -> List[str]:
         return []
 
 
+import time as _time
+
+_holdings_cache: dict = {"data": {}, "ts": 0.0}
+_HOLDINGS_TTL = 300
+
+
 def get_holdings_map() -> dict:
+    if _time.time() - _holdings_cache["ts"] < _HOLDINGS_TTL and _holdings_cache["data"]:
+        return _holdings_cache["data"]
     try:
         rows = _raw_sql("SELECT id, nombre FROM holdings WHERE activo = TRUE")
-        return {row["id"]: row["nombre"] for row in rows}
+        result = {row["id"]: row["nombre"] for row in rows}
+        _holdings_cache["data"] = result
+        _holdings_cache["ts"] = _time.time()
+        return result
     except Exception as e:
         logger.error(f"[supa_repo] get_holdings_map: {e}")
-        return {}
+        return _holdings_cache["data"] or {}
 
 
 def get_distinct_holdings() -> List[dict]:
@@ -365,8 +421,9 @@ def _get_oc_id(codigo_oc: str) -> Optional[str]:
         return None
 
 
-def get_lineas(codigo_oc: str) -> List[LineaOC]:
-    oc_id = _get_oc_id(codigo_oc)
+def get_lineas(codigo_oc: str, oc_id: Optional[str] = None) -> List[LineaOC]:
+    if not oc_id:
+        oc_id = _get_oc_id(codigo_oc)
     if not oc_id:
         return []
     try:
@@ -382,8 +439,9 @@ def get_lineas(codigo_oc: str) -> List[LineaOC]:
 
 # ── Historial y document source ───────────────────────────────────────────────
 
-def get_estado_historial(codigo_oc: str, limit: int = 10) -> List[dict]:
-    oc_id = _get_oc_id(codigo_oc)
+def get_estado_historial(codigo_oc: str, limit: int = 10, oc_id: Optional[str] = None) -> List[dict]:
+    if not oc_id:
+        oc_id = _get_oc_id(codigo_oc)
     if not oc_id:
         return []
     try:

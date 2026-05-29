@@ -93,6 +93,8 @@ export default function OcListPage() {
       return buildColWidths()
     }
   })
+  const PAGE_SIZE = 50
+  const [page, setPage] = useState(0)
   const [filters, setFilters] = useState<OcFilters>({})
   const [draft, setDraft] = useState<OcFilters>({})
   const [selectedCodigo, setSelectedCodigo] = useState<string | null>(null)
@@ -124,10 +126,13 @@ export default function OcListPage() {
     }
   }, [searchParams])
 
-  const { data: ocs = [], isLoading, refetch, isFetching } = useQuery({
-    queryKey: ['ocs', filters],
-    queryFn: () => getOcs(filters),
+  const { data: ocsResponse, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ['ocs', filters, page],
+    queryFn: () => getOcs(filters, PAGE_SIZE, page * PAGE_SIZE),
   })
+  const ocs = ocsResponse?.items ?? []
+  const totalOcs = ocsResponse?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(totalOcs / PAGE_SIZE))
 
   const { data: filtros } = useQuery({
     queryKey: ['filtros'],
@@ -246,9 +251,9 @@ export default function OcListPage() {
     mutationFn: () => importarOcMp(searchedOcCode),
     onSuccess: (result) => {
       const next = { busqueda: result.codigo_oc }
-      qc.setQueryData(['ocs', next], [result.oc])
+      qc.setQueryData(['ocs', next, 0], { items: [result.oc], total: 1, limit: PAGE_SIZE, offset: 0 })
       setDraft(next)
-      setFilters(next)
+      setFilters(next); setPage(0)
       syncSearchParams(next)
       setSelectedCodigo(result.codigo_oc)
       void qc.invalidateQueries({ queryKey: ['ocs'] })
@@ -272,13 +277,13 @@ export default function OcListPage() {
 
   const apply = () => {
     const next = { ...draft }
-    setFilters(next)
+    setFilters(next); setPage(0)
     syncSearchParams(next)
   }
 
   const clear = () => {
     setDraft({})
-    setFilters({})
+    setFilters({}); setPage(0)
     setSoloHoy(false)
     setSearchParams({}, { replace: true })
   }
@@ -289,14 +294,14 @@ export default function OcListPage() {
       const currentDay = today()
       const next = { ...draft, fecha_desde: currentDay, fecha_hasta: currentDay }
       setDraft(next)
-      setFilters(next)
+      setFilters(next); setPage(0)
       syncSearchParams(next)
       return
     }
 
     const next = { ...draft, fecha_desde: undefined, fecha_hasta: undefined }
     setDraft(next)
-    setFilters(next)
+    setFilters(next); setPage(0)
     syncSearchParams(next)
   }
 
@@ -479,7 +484,7 @@ export default function OcListPage() {
                 <div>
                   <div className="text-sm font-semibold text-gray-100">Bandeja de OCs</div>
                   <div className="mt-0.5 text-[11px] text-gray-500">
-                    {ocs.length} resultado(s){selectedCodigo ? ' | detalle abierto' : ' | selecciona una fila para ver detalle'}
+                    {totalOcs} resultado(s) — pág. {page + 1}/{totalPages}{selectedCodigo ? ' | detalle abierto' : ''}
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
@@ -605,6 +610,27 @@ export default function OcListPage() {
                 </table>
               )}
             </div>
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between border-t border-gray-800 px-4 py-2">
+                <button
+                  className="btn-ghost px-3 py-1 text-xs disabled:opacity-30"
+                  disabled={page <= 0}
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                >
+                  ← Anterior
+                </button>
+                <span className="text-xs text-gray-400">
+                  Página {page + 1} de {totalPages}
+                </span>
+                <button
+                  className="btn-ghost px-3 py-1 text-xs disabled:opacity-30"
+                  disabled={page >= totalPages - 1}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  Siguiente →
+                </button>
+              </div>
+            )}
           </section>
         </div>
       </div>

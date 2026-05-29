@@ -130,6 +130,13 @@ class OcDetailOut(BaseModel):
     documento: Optional[DocumentoFuenteOut] = None
 
 
+class OcListResponse(BaseModel):
+    items: List[OrdenCompraOut]
+    total: int
+    limit: int
+    offset: int
+
+
 class StatsOut(BaseModel):
     total: int
     sin_homolog: int

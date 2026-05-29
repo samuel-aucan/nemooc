@@ -797,15 +797,23 @@ function LineaRow({
         </td>
         <td>
           {linea.itemcode_sap ? (
-            <span
-              className="copyable-text font-mono text-xs text-blue-300"
-              title="Doble clic para copiar"
-              onMouseDown={blockRowToggle}
-              onClick={blockRowToggle}
-              onDoubleClick={(event) => copyCell(event, linea.itemcode_sap || '', 'ItemCode SAP copiado')}
-            >
-              {linea.itemcode_sap}
-            </span>
+            <div className="flex items-center gap-1">
+              <span
+                className="copyable-text font-mono text-xs text-blue-300"
+                title="Doble clic para copiar"
+                onMouseDown={blockRowToggle}
+                onClick={blockRowToggle}
+                onDoubleClick={(event) => copyCell(event, linea.itemcode_sap || '', 'ItemCode SAP copiado')}
+              >
+                {linea.itemcode_sap}
+              </span>
+              {linea.estado_homologacion === 'manual' && (
+                <span className="rounded bg-amber-500/20 px-1 py-0.5 text-[9px] font-semibold uppercase text-amber-300" title="Asignado manualmente">Editado</span>
+              )}
+              {linea.estado_homologacion === 'sugerido' && (
+                <span className="rounded bg-violet-500/20 px-1 py-0.5 text-[9px] font-semibold uppercase text-violet-300" title="Asignado desde sugerencia">Sugerido</span>
+              )}
+            </div>
           ) : (
             <span className="copyable-text font-mono text-xs text-gray-500">Sin itemcode</span>
           )}
@@ -910,43 +918,45 @@ function LineaRow({
                 )}
               </div>
 
-              <div className="flex flex-wrap items-end gap-2 rounded-lg border border-gray-800 bg-gray-950/45 px-3 py-3">
-                <label className="min-w-[120px] flex-1 text-xs text-gray-400">
+              <div className="grid grid-cols-[auto_auto_1fr] items-end gap-x-3 gap-y-2 rounded-lg border border-gray-800 bg-gray-950/45 px-3 py-3">
+                <label className="text-xs text-gray-400">
                   Cant SAP
                   <input
-                    className="input mt-1 h-9 text-right font-mono"
+                    className="input mt-1 h-9 w-28 text-right font-mono"
                     inputMode="decimal"
                     value={cantidadSapDraft}
                     onChange={(event) => setCantidadSapDraft(event.target.value)}
                   />
                 </label>
-                <label className="min-w-[140px] flex-1 text-xs text-gray-400">
+                <label className="text-xs text-gray-400">
                   Precio SAP
                   <input
-                    className="input mt-1 h-9 text-right font-mono"
+                    className="input mt-1 h-9 w-32 text-right font-mono"
                     inputMode="decimal"
                     value={precioSapDraft}
                     onChange={(event) => setPrecioSapDraft(event.target.value)}
                   />
                 </label>
-                <button
-                  className="btn-primary h-9 px-3 text-xs"
-                  onClick={handleSaveSapValues}
-                  disabled={mutSapValues.isPending || mutResetSapValues.isPending}
-                  title="Guardar valores SAP manuales"
-                >
-                  <Save size={14} />
-                  Guardar y aprender
-                </button>
-                <button
-                  className="btn-secondary h-9 px-3 text-xs"
-                  onClick={handleResetSapValues}
-                  disabled={mutSapValues.isPending || mutResetSapValues.isPending}
-                  title="Recalcular con la regla automatica"
-                >
-                  <RotateCcw size={14} />
-                  Recalcular
-                </button>
+                <div className="flex gap-2 justify-self-start">
+                  <button
+                    className="btn-primary h-9 px-3 text-xs"
+                    onClick={handleSaveSapValues}
+                    disabled={mutSapValues.isPending || mutResetSapValues.isPending}
+                    title="Guardar valores SAP manuales"
+                  >
+                    <Save size={14} />
+                    Guardar y aprender
+                  </button>
+                  <button
+                    className="btn-secondary h-9 px-3 text-xs"
+                    onClick={handleResetSapValues}
+                    disabled={mutSapValues.isPending || mutResetSapValues.isPending}
+                    title="Recalcular con la regla automatica"
+                  >
+                    <RotateCcw size={14} />
+                    Recalcular
+                  </button>
+                </div>
               </div>
 
               <div className="flex flex-wrap items-start gap-2">
@@ -1052,7 +1062,8 @@ function CompactMeta({
 
 function formatDateTime(value: string): string {
   if (!value) return ''
-  const parsed = new Date(value)
+  const utcValue = value.endsWith('Z') || value.includes('+') ? value : value + 'Z'
+  const parsed = new Date(utcValue)
   if (Number.isNaN(parsed.getTime())) return value
   return new Intl.DateTimeFormat('es-CL', {
     dateStyle: 'short',

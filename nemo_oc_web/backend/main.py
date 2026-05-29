@@ -118,8 +118,8 @@ def debug_ocs():
     import traceback
     try:
         from backend.core.repo_selector import oc_repo as _repo
-        ocs = _repo.get_all_ocs()
-        return {"ok": True, "count": len(ocs), "first": ocs[0].codigo_oc if ocs else None}
+        ocs, total = _repo.get_all_ocs()
+        return {"ok": True, "count": total, "first": ocs[0].codigo_oc if ocs else None}
     except Exception as e:
         return {"ok": False, "error": str(e), "traceback": traceback.format_exc()}
 
@@ -131,7 +131,7 @@ def debug_ocs_full():
     try:
         from backend.core.repo_selector import oc_repo as _repo
         from backend.api.oc_routes import _enrich_oc, OrdenCompraOut
-        ocs = _repo.get_all_ocs()
+        ocs, _ = _repo.get_all_ocs()
         step = "get_all_ocs OK"
         holdings_map = _repo.get_holdings_map()
         step = "get_holdings_map OK"
