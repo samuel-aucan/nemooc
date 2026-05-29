@@ -239,18 +239,38 @@ def _normalize_portable_catalog_paths(cfg: AppConfig) -> AppConfig:
     return cfg
 
 
+def _apply_env_overrides(cfg: AppConfig) -> AppConfig:
+    """
+    Las variables de entorno tienen prioridad sobre settings.json para campos
+    sensibles. Permite mantener los secretos FUERA del repositorio (que es
+    público) y configurarlos solo en el entorno de despliegue (Railway).
+    """
+    env_map = {
+        "NEMOOC_API_TICKET": "api_ticket",
+        "NEMOOC_CODIGO_EMPRESA": "codigo_empresa",
+        "NEMOOC_SMTP_USER": "smtp_user",
+        "NEMOOC_SMTP_PASSWORD": "smtp_password",
+        "NEMOOC_IMAP_SERVER": "imap_server",
+    }
+    for env_key, field_name in env_map.items():
+        value = os.getenv(env_key)
+        if value:  # solo si está definida y no vacía
+            setattr(cfg, field_name, value)
+    return cfg
+
+
 def load_config() -> AppConfig:
     try:
         if SETTINGS_FILE.exists():
-            return _normalize_portable_catalog_paths(_load_config_file(SETTINGS_FILE))
+            return _apply_env_overrides(_normalize_portable_catalog_paths(_load_config_file(SETTINGS_FILE)))
         if DEFAULT_SETTINGS_FILE.exists():
             cfg = _normalize_portable_catalog_paths(_load_config_file(DEFAULT_SETTINGS_FILE))
             save_config(cfg)
             logger.info(f"Configuracion inicial creada desde plantilla: {DEFAULT_SETTINGS_FILE}")
-            return cfg
+            return _apply_env_overrides(cfg)
     except Exception as e:
         logger.warning(f"No se pudo cargar configuración: {e}")
-    return _normalize_portable_catalog_paths(AppConfig())
+    return _apply_env_overrides(_normalize_portable_catalog_paths(AppConfig()))
 
 
 def save_config(cfg: AppConfig) -> None:

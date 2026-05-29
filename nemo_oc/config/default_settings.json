@@ -1,6 +1,6 @@
 {
   "auth_enabled": false,
-  "api_ticket": "82A7A181-C562-4ED2-84CF-CD631CEFCFB3",
+  "api_ticket": "",
   "codigo_empresa": "227926",
   "rut_proveedor": "76.215.260-6",
   "homologacion_path": "",
@@ -16,8 +16,8 @@
   "log_level": "INFO",
   "smtp_host": "smtp.gmail.com",
   "smtp_port": 587,
-  "smtp_user": "automatizacionnemo@gmail.com",
-  "smtp_password": "tuzp zurq pbln nlrb",
+  "smtp_user": "",
+  "smtp_password": "",
   "smtp_enabled": false,
   "redsalud_homo_path": "",
   "imap_server": "imap.gmail.com",
