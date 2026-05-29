@@ -99,8 +99,8 @@ def import_single_public_oc(
     try:
         from backend.supabase_write_service import upsert_oc as _upsert_sb
         _upsert_sb(oc, lineas)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"[sync] dual-write Supabase falló para {codigo}: {e}")
 
     n_homo = len(lineas) - len(sin_homo)
     return {
@@ -241,8 +241,8 @@ def run_sync(
                     target=lambda o=_oc_snap, l=_lineas_snap: _upsert_sb(o, l),
                     daemon=True,
                 ).start()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[sync] no se pudo lanzar dual-write Supabase: {e}")
 
         estados_finales = {
             "recepcion conforme",
@@ -382,8 +382,8 @@ def run_sync_light(
                             target=lambda o=_oc_snap, l=_lineas_snap: _upsert_sb(o, l),
                             daemon=True,
                         ).start()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"[sync_light] dual-write Supabase falló para {codigo}: {e}")
 
         except Exception as e:
             emit("log", message=f"  [{idx}/{total}] {codigo} - ERROR: {e}")
