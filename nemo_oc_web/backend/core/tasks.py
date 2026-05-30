@@ -20,6 +20,7 @@ PUBLIC_SYNC_INTERVAL_MINUTES = 5
 MIN_PUBLIC_SYNC_INTERVAL_MINUTES = 5
 MAX_PUBLIC_SYNC_INTERVAL_MINUTES = 60
 PRIVATE_SYNC_DELAY_MINUTES = 7
+LIGHT_SYNC_INTERVAL_MINUTES = 5
 LAST_MP_SYNC_CONFIG_KEY = "last_mp_sync_at"
 STARTUP_SYNC_GRACE_SECONDS = 75
 
@@ -369,25 +370,16 @@ def get_next_scheduled_sync_time():
 
 
 def _calculate_next_light_sync():
-    """Calcula la próxima hora de sync (cada 2 horas)."""
+    """Calcula la proxima sincronizacion ligera de estados MP."""
     now = datetime.now()
-    # Próxima ejecución: siguiente múltiplo de 2 horas
-    hour = now.hour
-
-    next_hour = ((hour // 2) + 1) * 2
-    next_base = now
-    if next_hour >= 24:
-        next_hour = 0
-        next_base = now + timedelta(days=1)
-
-    return next_base.replace(hour=next_hour, minute=0, second=0, microsecond=0)
+    return now + timedelta(minutes=LIGHT_SYNC_INTERVAL_MINUTES)
 
 
 async def _light_sync_loop():
-    """Loop que ejecuta sincronización ligera cada 2 horas."""
+    """Loop que ejecuta sincronizacion ligera frecuente para estados MP."""
     global _next_light_sync_time
 
-    _add_log("=== Light Sync Loop Iniciado (cada 2 horas) ===")
+    _add_log(f"=== Light Sync Loop Iniciado (cada {LIGHT_SYNC_INTERVAL_MINUTES} min) ===")
 
     cfg = load_config()
     if cfg.api_ticket and not cfg.auto_sync:
@@ -522,3 +514,49 @@ def stop_light_sync():
     if _light_sync_task:
         _light_sync_task.cancel()
         _light_sync_task = None
+
+
+# ── Chequeo de OCs pendientes (notificaciones) ──────────────────────────────
+
+OC_CHECKS_INTERVAL_SECONDS = 3600  # cada 1 hora
+_oc_checks_task = None
+_oc_checks_stop_event = asyncio.Event()
+
+
+async def _oc_checks_loop():
+    """Revisa OCs sin ingresar (12h) y sin atender (3d), notifica vendedor/admin."""
+    # Espera inicial para no competir con el arranque
+    await asyncio.sleep(120)
+    while not _oc_checks_stop_event.is_set():
+        try:
+            from backend.core.notificaciones import revisar_ocs_pendientes
+            res = await asyncio.to_thread(revisar_ocs_pendientes)
+            if res.get("sin_ingresar") or res.get("sin_atender"):
+                _add_log(
+                    f"Notificaciones OC: {res['sin_ingresar']} sin ingresar, "
+                    f"{res['sin_atender']} sin atender"
+                )
+        except Exception as e:
+            logger.warning(f"[oc_checks] error: {e}")
+        try:
+            await asyncio.wait_for(_oc_checks_stop_event.wait(), timeout=OC_CHECKS_INTERVAL_SECONDS)
+        except asyncio.TimeoutError:
+            pass
+
+
+def start_oc_checks():
+    """Inicia el loop de chequeo de OCs pendientes."""
+    global _oc_checks_task
+    if _oc_checks_task and not _oc_checks_task.done():
+        return
+    _oc_checks_stop_event.clear()
+    _oc_checks_task = asyncio.create_task(_oc_checks_loop())
+
+
+def stop_oc_checks():
+    """Detiene el loop de chequeo de OCs."""
+    global _oc_checks_task
+    _oc_checks_stop_event.set()
+    if _oc_checks_task:
+        _oc_checks_task.cancel()
+        _oc_checks_task = None

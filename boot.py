@@ -20,6 +20,8 @@ _PATCH = [
     ("nemo_oc_web/backend/api/schemas.py",              "/app/nemo_oc_web/backend/api/schemas.py"),
     ("nemo_oc_web/backend/api/auth_routes.py",          "/app/nemo_oc_web/backend/api/auth_routes.py"),
     ("nemo_oc_web/backend/core/auth.py",                "/app/nemo_oc_web/backend/core/auth.py"),
+    ("nemo_oc_web/backend/core/notificaciones.py",      "/app/nemo_oc_web/backend/core/notificaciones.py"),
+    ("nemo_oc_web/backend/core/tasks.py",               "/app/nemo_oc_web/backend/core/tasks.py"),
     ("nemo_oc/app/services/sync_service.py",            "/app/nemo_oc/app/services/sync_service.py"),
     ("nemo_oc/app/services/sap_mode_service.py",        "/app/nemo_oc/app/services/sap_mode_service.py"),
 ]
@@ -34,6 +36,14 @@ for _src, _dst in _PATCH:
         print(f"[boot] WARN {_dst}: {_e}", flush=True)
 
 print(f"[boot] patched {_ok}/{len(_PATCH)} files ({_fail} failed)", flush=True)
+
+# Asegurar dependencias que no estan en la imagen cacheada
+try:
+    import pywebpush  # noqa: F401
+except ImportError:
+    import subprocess
+    print("[boot] instalando pywebpush...", flush=True)
+    subprocess.run([sys.executable, "-m", "pip", "install", "--no-cache-dir", "pywebpush>=2.0.0"], check=False)
 
 # Garantizar paths
 for _p in ["/app/nemo_oc_web", "/app/nemo_oc"]:

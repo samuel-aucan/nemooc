@@ -169,7 +169,7 @@ def upsert_oc(oc, lineas: list) -> None:
             ON CONFLICT (codigo_oc) DO UPDATE SET
                 {', '.join(update_parts)},
                 updated_at = NOW()
-            RETURNING id
+            RETURNING id, (xmax = 0) AS inserted
         """
         rows = _raw_sql(sql)
         if not rows:
@@ -177,6 +177,15 @@ def upsert_oc(oc, lineas: list) -> None:
             return
 
         oc_id = rows[0]["id"]
+        es_nueva = bool(rows[0].get("inserted"))
+
+        # Notificar al vendedor si la OC es nueva (no un update)
+        if es_nueva and cartera_id:
+            try:
+                from backend.core.notificaciones import notificar_oc_nueva
+                notificar_oc_nueva(oc_id, oc.codigo_oc, cartera_id)
+            except Exception as e:
+                logger.debug(f"[supabase_write] notif oc nueva {oc.codigo_oc}: {e}")
 
         # Upsert líneas
         for l in lineas:

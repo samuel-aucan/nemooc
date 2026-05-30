@@ -53,6 +53,8 @@ async def lifespan(app: FastAPI):
         stop_private_sync,
         start_light_sync,
         stop_light_sync,
+        start_oc_checks,
+        stop_oc_checks,
     )
     from app.services.notification_scheduler_service import (
         start_notification_scheduler,
@@ -61,11 +63,13 @@ async def lifespan(app: FastAPI):
     start_auto_sync()
     start_private_sync()
     start_light_sync()
+    start_oc_checks()
     start_notification_scheduler()
     yield
     stop_auto_sync()
     stop_private_sync()
     stop_light_sync()
+    stop_oc_checks()
     stop_notification_scheduler()
 
 
