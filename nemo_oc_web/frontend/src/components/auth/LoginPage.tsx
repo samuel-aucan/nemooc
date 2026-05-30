@@ -4,11 +4,13 @@ import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 
 import { bootstrapAdmin, completeReset, getBootstrapStatus, getCurrentUser, login } from '../../api/auth'
 import { ApiError } from '../../api/client'
+import { useAppearanceSettings } from '../../hooks/useAppearance'
 
 export default function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const qc = useQueryClient()
+  const { logoSrc } = useAppearanceSettings()
 
   const authQuery = useQuery({
     queryKey: ['auth', 'me'],
@@ -94,8 +96,8 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-gray-950 px-6 py-10">
       <div className="mx-auto flex min-h-[calc(100vh-5rem)] max-w-6xl items-center gap-8">
-        <div className="hidden flex-1 rounded-[32px] border border-gray-800 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.18),transparent_40%),linear-gradient(180deg,rgba(17,24,39,0.98),rgba(3,7,18,0.96))] p-10 shadow-2xl lg:block">
-          <img src="/branding/logo-nemo-dark.png" alt="NemoOC" className="w-56 opacity-95" />
+        <div className="auth-hero-panel hidden rounded-[32px] border border-gray-800 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.18),transparent_40%),linear-gradient(180deg,rgba(17,24,39,0.98),rgba(3,7,18,0.96))] p-10 shadow-2xl lg:block">
+          <img src={logoSrc} alt="NEMONKEY" className="w-56 opacity-95" />
           <div className="mt-10 max-w-lg space-y-4">
             <p className="text-sm uppercase tracking-[0.18em] text-accent">Acceso protegido</p>
             <h1 className="text-4xl font-semibold tracking-tight text-gray-50">
@@ -109,7 +111,7 @@ export default function LoginPage() {
                 ? 'Primera vez: crea el usuario administrador inicial para dejar la aplicación lista para producción.'
                 : mode === 'reset'
                   ? 'Usa el token temporal que te entregó un administrador para definir tu nueva contraseña.'
-                  : 'Ingresa con tu usuario y contraseña para continuar trabajando en NemoOC Web.'}
+                  : 'Ingresa con tu usuario y contrasena para continuar trabajando en NEMONKEY.'}
             </div>
           </div>
         </div>
@@ -121,7 +123,7 @@ export default function LoginPage() {
                 {requiresSetup ? 'Configuracion inicial' : mode === 'reset' ? 'Activacion de acceso' : 'Inicio de sesion'}
               </p>
               <h2 className="mt-3 text-2xl font-semibold text-gray-50">
-                {requiresSetup ? 'Crear administrador' : mode === 'reset' ? 'Definir nueva contraseña' : 'Entrar a NemoOC'}
+                {requiresSetup ? 'Crear administrador' : mode === 'reset' ? 'Definir nueva contrasena' : 'Entrar a NEMONKEY'}
               </h2>
               <p className="mt-2 text-sm leading-6 text-gray-400">
                 {requiresSetup
@@ -151,13 +153,13 @@ export default function LoginPage() {
                 )}
 
                 <label className="block">
-                  <span className="label">Usuario</span>
+                  <span className="label">{requiresSetup ? 'Usuario' : 'Email'}</span>
                   <input
                     className="input"
                     value={username}
                     onChange={(event) => setUsername(event.target.value)}
-                    placeholder="admin"
-                    autoComplete="username"
+                    placeholder={requiresSetup ? 'admin' : 'usuario@nemochile.cl'}
+                    autoComplete={requiresSetup ? 'username' : 'email'}
                   />
                 </label>
 

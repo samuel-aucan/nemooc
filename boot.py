@@ -18,6 +18,8 @@ _PATCH = [
     ("nemo_oc_web/backend/main.py",                     "/app/nemo_oc_web/backend/main.py"),
     ("nemo_oc_web/backend/api/oc_routes.py",            "/app/nemo_oc_web/backend/api/oc_routes.py"),
     ("nemo_oc_web/backend/api/schemas.py",              "/app/nemo_oc_web/backend/api/schemas.py"),
+    ("nemo_oc_web/backend/api/auth_routes.py",          "/app/nemo_oc_web/backend/api/auth_routes.py"),
+    ("nemo_oc_web/backend/core/auth.py",                "/app/nemo_oc_web/backend/core/auth.py"),
     ("nemo_oc/app/services/sync_service.py",            "/app/nemo_oc/app/services/sync_service.py"),
     ("nemo_oc/app/services/sap_mode_service.py",        "/app/nemo_oc/app/services/sap_mode_service.py"),
 ]

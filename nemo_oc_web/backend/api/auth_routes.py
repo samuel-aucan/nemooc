@@ -7,6 +7,7 @@ from backend.core.auth import (
     count_users,
     create_user,
     get_current_user,
+    get_supabase_profile_rol,
     get_user_by_username,
     is_auth_disabled,
     initiate_access_reset,
@@ -16,8 +17,10 @@ from backend.core.auth import (
     logout_session,
     require_admin,
     set_user_password,
+    sync_supabase_user_to_local,
     update_user,
     verify_password,
+    verify_supabase_credentials,
 )
 
 # Rate limiting: {username -> [timestamp, timestamp, ...]}
@@ -100,6 +103,19 @@ def login(body: AuthLoginIn, request: Request):
         raise HTTPException(400, detail="Primero debes crear el usuario administrador inicial.")
 
     _check_rate_limit(body.username)
+
+    sb_user = verify_supabase_credentials(body.username, body.password)
+    if sb_user:
+        rol = get_supabase_profile_rol(sb_user["supabase_id"])
+        if rol not in ("admin", "operador"):
+            _record_failed_attempt(body.username)
+            raise HTTPException(403, detail="Tu cuenta no tiene acceso a NemoKey.")
+        local_user = sync_supabase_user_to_local(
+            sb_user["email"], sb_user["nombre_completo"], rol
+        )
+        _login_attempts.pop(body.username, None)
+        session_user = login_session(request, local_user)
+        return AuthUserOut(**session_user)
 
     user = get_user_by_username(body.username)
     if not user or not verify_password(body.password, user["password_hash"]):

@@ -8,7 +8,7 @@ import api from '../../api/client'
 const links = [
   { to: '/', icon: LayoutList, label: 'Ordenes de compra', description: 'Bandeja principal y detalle' },
   { to: '/import', icon: Download, label: 'Importaciones', description: 'Mercado Publico y privados' },
-  { to: '/stats', icon: BarChart3, label: 'Estadisticas', description: 'Cobertura, sugerencias y cola experta' },
+  { to: '/stats', icon: BarChart3, label: 'Centro de Control', description: 'Productividad, KPI y cola experta' },
   { to: '/holdings', icon: Building2, label: 'Holdings', description: 'Clientes, correos y catalogos' },
   { to: '/users', icon: Users, label: 'Usuarios', description: 'Accesos, roles y contraseñas' },
   { to: '/auditoria', icon: ShieldAlert, label: 'Auditoria', description: 'Discrepancias portal vs SAP' },
@@ -20,7 +20,7 @@ export default function Sidebar() {
   const qc = useQueryClient()
   const { data: syncStatus } = useQuery({
     queryKey: ['sync-status'],
-    queryFn: () => api.get<{ running: boolean; active_tasks: string[]; next_light_sync?: string }>('/sync/status').then((r) => r.data),
+    queryFn: () => api.get<{ running: boolean; active_tasks: string[]; next_light_sync?: string; last_sync_at?: string }>('/sync/status').then((r) => r.data),
     refetchInterval: 5000,
   })
   const { data: currentUser } = useQuery({
@@ -43,22 +43,26 @@ export default function Sidebar() {
   const authDisabled = currentUser?.auth_disabled ?? false
 
   return (
-    <aside className="flex w-64 flex-shrink-0 flex-col border-r border-gray-800 bg-gray-950">
-      <div className="border-b border-gray-800 px-5 py-5">
-        <img
-          src="/branding/logo-nemo-dark.png"
-          alt="Nemo Insumos Medicos"
-          className="h-auto w-full opacity-95"
-        />
-        <p className="mt-3 text-xs leading-5 text-gray-500">
-          Centro de control para ordenes de compra publicas y privadas.
-        </p>
+    <aside className="flex w-52 flex-shrink-0 flex-col border-r border-gray-800" style={{ background: 'linear-gradient(180deg, rgb(var(--accent-900) / 0.45) 0%, rgb(3 7 18) 40%, rgb(3 7 18) 100%)' }}>
+      <div className="border-b border-gray-800 px-5 py-5" style={{ background: 'linear-gradient(180deg, rgb(var(--accent-500) / 0.10) 0%, rgb(var(--accent-900) / 0.25) 60%, transparent 100%)' }}>
+        <div className="flex flex-col items-center gap-2">
+          <img
+            src="/branding/logo-nemo-dark.png"
+            alt="Nemo Insumos Medicos"
+            className="h-36 w-36 rounded-2xl object-contain"
+            style={{ filter: 'drop-shadow(0 4px 16px rgb(var(--accent-500) / 0.40))' }}
+          />
+          <div className="text-center">
+            <div className="text-sm font-semibold text-gray-100">NeMonkey</div>
+            <div className="text-[11px] text-gray-500">Nemo Insumos Medicos</div>
+          </div>
+        </div>
       </div>
 
       <nav className="flex-1 space-y-1 px-3 py-4" aria-label="Navegacion principal">
         {links
           .filter((link) => {
-            if (link.to === '/users') {
+            if (link.to === '/users' || link.to === '/config') {
               return !authDisabled && currentUser?.rol === 'admin'
             }
             return true
@@ -78,9 +82,10 @@ export default function Sidebar() {
               style={({ isActive }) =>
                 isActive
                   ? {
-                      backgroundColor: 'rgba(var(--accent-900), 0.34)',
+                      background: 'linear-gradient(90deg, rgb(var(--accent-500) / 0.25) 0%, rgb(var(--accent-900) / 0.55) 50%, rgb(var(--accent-900) / 0.15) 100%)',
                       color: 'rgb(var(--accent-400))',
-                      borderColor: 'rgba(var(--accent-500), 0.28)',
+                      borderColor: 'rgb(var(--accent-500) / 0.40)',
+                      boxShadow: 'inset 3px 0 0 rgb(var(--accent-500) / 0.9), 0 2px 10px rgb(var(--accent-500) / 0.15)',
                     }
                   : undefined
               }
@@ -92,7 +97,7 @@ export default function Sidebar() {
                     style={
                       isActive
                         ? {
-                            backgroundColor: 'rgba(var(--accent-500), 0.16)',
+                            background: 'linear-gradient(135deg, rgb(var(--accent-500) / 0.30), rgb(var(--accent-600) / 0.15))',
                             color: 'rgb(var(--accent-400))',
                           }
                         : undefined
@@ -104,7 +109,6 @@ export default function Sidebar() {
                     <div className={`text-sm font-medium ${isActive ? 'text-accent' : 'text-gray-100'}`}>
                       {label}
                     </div>
-                    <div className="mt-0.5 text-xs leading-5 text-gray-500">{description}</div>
                   </div>
                 </div>
               )}
@@ -174,24 +178,9 @@ export default function Sidebar() {
         </div>
       )}
 
-      {authDisabled && (
-        <div className="border-t border-gray-800 px-4 py-4">
-          <div className="rounded-xl border border-gray-800 bg-gray-900/70 px-3 py-3">
-            <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-gray-500">
-              <Shield size={12} />
-              Uso local
-            </div>
-            <div className="text-sm font-medium text-gray-100">Acceso directo habilitado</div>
-            <div className="mt-1 text-xs leading-5 text-gray-500">
-              Esta instalacion no pide usuario ni contraseña.
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="space-y-1 border-t border-gray-800 px-4 py-4 text-xs text-gray-500">
-        <div>v2.0 - Web</div>
-        <div className="text-[11px] text-gray-600">Desarrollado por Samuel Belmar</div>
+      <div className="space-y-1 border-t border-gray-800 px-4 py-3 text-xs text-gray-500">
+        <div>NeMonkey v2.0</div>
+        <div className="text-[10px] text-gray-700">Desarrollado por Samuel Belmar</div>
       </div>
     </aside>
   )

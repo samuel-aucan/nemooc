@@ -25,6 +25,7 @@ from backend.core.auth import (
     SESSION_COOKIE_NAME,
     SESSION_MAX_AGE,
     get_session_secret,
+    require_admin,
     require_auth,
     should_secure_cookies,
 )
@@ -100,7 +101,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(oc_router, dependencies=[Depends(require_auth)])
 app.include_router(sync_router, dependencies=[Depends(require_auth)])
-app.include_router(config_router, dependencies=[Depends(require_auth)])
+app.include_router(config_router, dependencies=[Depends(require_admin)])
 app.include_router(catalog_router, dependencies=[Depends(require_auth)])
 app.include_router(holdings_router, dependencies=[Depends(require_auth)])
 app.include_router(gd_router, dependencies=[Depends(require_auth)])

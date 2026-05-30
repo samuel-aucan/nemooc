@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 from datetime import datetime, timedelta
@@ -400,3 +401,88 @@ def complete_access_reset(username: str, token: str, password: str) -> dict[str,
         raise HTTPException(401, detail="El token de acceso no es válido.")
 
     return set_user_password(int(user["id"]), password)
+
+
+# ── Supabase Auth Integration ───────────────────────────────────────────────
+
+_sb_auth_logger = logging.getLogger("nemokey.supabase_auth")
+
+
+def verify_supabase_credentials(email: str, password: str) -> Optional[dict[str, Any]]:
+    """Verifica credenciales contra Supabase GoTrue. Retorna user data o None."""
+    import requests
+
+    supabase_url = os.environ.get("SUPABASE_URL", "")
+    anon_key = os.environ.get("SUPABASE_ANON_KEY", "") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
+    if not supabase_url or not anon_key:
+        _sb_auth_logger.warning("SUPABASE_URL o SUPABASE_ANON_KEY no configurados")
+        return None
+
+    try:
+        resp = requests.post(
+            f"{supabase_url}/auth/v1/token?grant_type=password",
+            headers={"apikey": anon_key, "Content-Type": "application/json"},
+            json={"email": email, "password": password},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        user = data.get("user", {})
+        return {
+            "supabase_id": user.get("id"),
+            "email": user.get("email"),
+            "nombre_completo": (user.get("user_metadata") or {}).get("nombre_completo", ""),
+        }
+    except Exception as e:
+        _sb_auth_logger.error(f"Error verificando Supabase: {e}")
+        return None
+
+
+def get_supabase_profile_rol(supabase_user_id: str) -> str:
+    """Obtiene el rol del usuario desde la tabla profiles de Supabase."""
+    from backend.supabase_oc_repository import _raw_sql
+
+    try:
+        rows = _raw_sql(
+            "SELECT rol FROM profiles WHERE id = %s LIMIT 1",
+            [supabase_user_id],
+        )
+        if rows:
+            rol = rows[0].get("rol", "operador")
+            return rol if rol in ("admin", "operador") else "operador"
+        return "operador"
+    except Exception as e:
+        _sb_auth_logger.error(f"Error obteniendo rol Supabase: {e}")
+        return "operador"
+
+
+def sync_supabase_user_to_local(email: str, nombre_completo: str, rol: str) -> dict[str, Any]:
+    """Crea o actualiza usuario local SQLite desde datos Supabase."""
+    now = datetime.now().isoformat()
+    normalized = email.strip().lower()
+    conn = get_connection()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM usuarios WHERE username = ?", (normalized,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE usuarios SET nombre_completo = ?, rol = ?, activo = 1, updated_at = ? WHERE username = ?",
+                (nombre_completo, rol, now, normalized),
+            )
+            conn.commit()
+        else:
+            placeholder_hash = hash_password(secrets.token_urlsafe(32))
+            conn.execute(
+                "INSERT INTO usuarios (username, password_hash, nombre_completo, rol, activo, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
+                (normalized, placeholder_hash, nombre_completo, rol, now, now),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+    user = get_user_by_username(normalized)
+    if not user:
+        raise HTTPException(500, detail="Error sincronizando usuario.")
+    return user
